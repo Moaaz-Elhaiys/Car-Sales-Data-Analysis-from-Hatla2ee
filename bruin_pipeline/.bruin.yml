@@ -1,0 +1,15 @@
+# Bruin connections config.
+# Environment variables are substituted from the .env file at runtime.
+default_environment: default
+
+environments:
+  default:
+    connections:
+      postgres:
+        - name: postgres-default
+          host: ${POSTGRES_HOST}
+          port: ${POSTGRES_PORT}
+          username: ${POSTGRES_USER}
+          password: ${POSTGRES_PASSWORD}
+          database: ${POSTGRES_DB}
+          ssl_mode: disable

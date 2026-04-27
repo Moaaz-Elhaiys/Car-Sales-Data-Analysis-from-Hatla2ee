@@ -1,0 +1,25 @@
+.git
+.gitignore
+.env
+.env.*
+!.env.example
+.DS_Store
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache
+.venv
+venv
+
+# Data / artefacts
+cars.csv
+*.log
+data/
+
+# Docs / screenshots
+*.pdf
+img.png
+
+# Bruin pipeline (not needed inside scrapy image)
+bruin_pipeline/
