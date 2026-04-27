@@ -29,7 +29,7 @@ class CarsSpider(scrapy.Spider):
             yield response.follow(url=car_url, callback=self.parse_car_page, headers=headers)
 
         next_page = response.xpath("//div[@class='pagination pagination-right']//li[@class='active']/following-sibling::li[1]/a/@href").get()
-        if "page" in next_page:
+        if next_page and "page" in next_page:
             next_page_url = base_url + next_page
             yield response.follow(url=next_page_url, callback=self.parse, headers=headers)
             
