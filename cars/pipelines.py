@@ -136,10 +136,13 @@ class PostgresPipeline:
         try:
             execute_batch(self.cur, self.UPSERT_SQL, self._buffer, page_size=self.batch_size)
             self.conn.commit()
-            logger.info("PostgresPipeline upserted %d rows into raw.cars", len(self._buffer))
         except Exception:
             self.conn.rollback()
-            logger.exception("PostgresPipeline failed to flush %d rows; rolling back", len(self._buffer))
+            logger.exception(
+                "PostgresPipeline failed to flush %d rows; rolling back (buffer kept for retry)",
+                len(self._buffer),
+            )
             raise
-        finally:
+        else:
+            logger.info("PostgresPipeline upserted %d rows into raw.cars", len(self._buffer))
             self._buffer.clear()
