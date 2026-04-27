@@ -43,7 +43,8 @@ make seed-raw
 
 # 5. Run Bruin transforms to build the star schema
 make bruin-validate    # static-check the assets
-make transform         # build staging.cars + dim_* + fact_car_listings
+make full-refresh      # first-time / clean rebuild of staging + dims + fact
+make transform         # subsequent runs: incremental — only touches rows updated in the last 7 days
 ```
 
 Then connect Power BI Desktop to `localhost:5432` using the credentials
@@ -60,9 +61,10 @@ make ps              # show running containers
 make psql            # open a psql shell inside the postgres container
 make scrape          # run the cars spider in the scrapy container
 make shell-scrapy    # interactive shell in the scrapy container
-make transform       # run the bruin pipeline (raw → staging → dims → fact)
+make transform       # incremental run: re-process raw rows updated in the last $INCREMENTAL_DAYS days (default 7)
+make full-refresh    # nuke + rebuild every Bruin asset from scratch
 make bruin-validate  # static-check bruin_pipeline/ config + asset SQL
-make seed-raw        # insert ~10 synthetic rows into raw.cars (no live site needed)
+make seed-raw        # insert ~11 synthetic rows into raw.cars (no live site needed)
 make smoke-pipeline  # smoke-test the Scrapy item pipeline end-to-end
 make clean           # stop AND delete volumes (DESTROYS data)
 ```
@@ -155,10 +157,35 @@ Quality checks (`not_null`, `unique`, `non_negative`) are declared in the
 asset YAML headers and Bruin runs them automatically after each asset
 — see the `make transform` output for results.
 
+### Incremental loading
+
+`staging.cars` is materialised with Bruin's `merge` strategy, keyed on
+`link` (the natural key from `raw.cars`). The asset's `SELECT` filters
+`raw.cars` to rows whose `updated_at` falls inside the run window
+(injected by Bruin as `{{ start_timestamp }}` / `{{ end_timestamp }}`),
+so re-runs only re-process rows the spider actually mutated:
+
+- `make transform` — incremental load. Sweeps the last
+  `INCREMENTAL_DAYS` days (default `7`). Tweak with
+  `make transform INCREMENTAL_DAYS=1` for a tighter window or
+  `INCREMENTAL_DAYS=30` for late-arriving mutations. New listings are
+  inserted; existing rows whose source data changed (e.g. price drop)
+  are updated in place; untouched rows aren't read at all.
+- `make full-refresh` — nuclear option. Drops the staging/dim/fact
+  tables and rebuilds them from scratch using `1970-01-01 → 2999-12-31`
+  as the window. Use this on first setup, after a schema change, or
+  whenever you suspect drift between `raw.cars` and the marts.
+
+`marts.dim_*` and `marts.fact_car_listings` rebuild from `staging.cars`
+on every run — they're tiny and rebuild in milliseconds, so the savings
+from incremental processing concentrate at the staging layer where the
+row count actually grows.
+
 ## Roadmap
 
 - [x] Docker backbone: Postgres + pgAdmin + containerised Scrapy & Bruin
 - [x] PostgreSQL item pipeline (writes to `raw.cars`, upsert by link)
 - [x] Bruin assets: `staging.cars` + dimension tables + `fact_car_listings`
 - [x] Data-quality checks on every layer
+- [x] Incremental loads on `staging.cars` (`merge` strategy + `updated_at` watermark)
 - [ ] Refresh the Power BI dashboard against the star schema

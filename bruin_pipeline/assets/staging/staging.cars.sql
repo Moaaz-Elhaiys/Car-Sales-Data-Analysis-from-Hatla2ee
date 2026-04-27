@@ -8,53 +8,80 @@ description: |
   numeric fields are cast (NULL on non-numeric), and a 4-digit model_year
   is parsed out of the free-text used_since column.
 
+  Loaded incrementally with the `merge` strategy on `link` (the natural
+  key). The source query filters raw.cars by `updated_at` against the run
+  window (Bruin injects {{ start_timestamp }} / {{ end_timestamp }}), so
+  scheduled re-runs only touch rows the spider modified since the last
+  run. New rows are inserted; existing rows whose source data changed
+  (e.g. price drop) are updated in place.
+
+  For a clean rebuild, run `make full-refresh` (which expands the window
+  to cover all of raw.cars).
+
 materialization:
   type: table
+  strategy: merge
 
 columns:
   - name: link
     type: text
     description: Source URL for the listing. Natural key.
+    primary_key: true
     checks:
       - name: not_null
       - name: unique
+  - name: title
+    type: text
+    update_on_merge: true
   - name: price_egp
     type: integer
     description: Listing price in EGP. NULL when raw price is empty/garbage.
+    update_on_merge: true
     checks:
       - name: non_negative
   - name: km
     type: integer
     description: Odometer reading in kilometres. NULL when raw km is garbage.
+    update_on_merge: true
     checks:
       - name: non_negative
   - name: model_year
     type: integer
     description: 4-digit year parsed from used_since. NULL if no year present.
+    update_on_merge: true
   - name: make
     type: text
+    update_on_merge: true
   - name: model
     type: text
+    update_on_merge: true
   - name: fuel
     type: text
+    update_on_merge: true
   - name: transmission
     type: text
+    update_on_merge: true
   - name: color
     type: text
+    update_on_merge: true
   - name: class
     type: text
+    update_on_merge: true
   - name: body_style
     type: text
+    update_on_merge: true
   - name: city
     type: text
-  - name: title
-    type: text
+    update_on_merge: true
   - name: scraped_at
     type: timestamptz
+    update_on_merge: true
     checks:
       - name: not_null
   - name: updated_at
     type: timestamptz
+    description: Source mutation timestamp. Drives the incremental window.
+    update_on_merge: true
     checks:
       - name: not_null
 
@@ -80,3 +107,5 @@ SELECT
     scraped_at,
     updated_at
 FROM raw.cars
+WHERE updated_at >= '{{ start_timestamp }}'
+  AND updated_at <  '{{ end_timestamp }}'
