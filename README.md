@@ -38,8 +38,12 @@ make up
 # 3. Scrape listings into raw.cars
 make scrape
 
-# 4. (Next PR) Run Bruin transforms to build the star schema
-make transform
+# 4. (Optional) Seed raw.cars with synthetic data if the live site is blocked
+make seed-raw
+
+# 5. Run Bruin transforms to build the star schema
+make bruin-validate    # static-check the assets
+make transform         # build staging.cars + dim_* + fact_car_listings
 ```
 
 Then connect Power BI Desktop to `localhost:5432` using the credentials
@@ -56,8 +60,10 @@ make ps              # show running containers
 make psql            # open a psql shell inside the postgres container
 make scrape          # run the cars spider in the scrapy container
 make shell-scrapy    # interactive shell in the scrapy container
-make transform       # run the bruin pipeline
-make bruin-validate  # validate bruin_pipeline/ config
+make transform       # run the bruin pipeline (raw → staging → dims → fact)
+make bruin-validate  # static-check bruin_pipeline/ config + asset SQL
+make seed-raw        # insert ~10 synthetic rows into raw.cars (no live site needed)
+make smoke-pipeline  # smoke-test the Scrapy item pipeline end-to-end
 make clean           # stop AND delete volumes (DESTROYS data)
 ```
 
@@ -92,10 +98,13 @@ On first connect in pgAdmin, register a new server with:
 │   ├── settings.py
 │   └── spiders/cars_spider.py
 ├── scrapy.cfg
+├── .bruin.yml                  # Bruin connections (lives at the repo root)
 ├── bruin_pipeline/
-│   ├── .bruin.yml              # Postgres connection
 │   ├── pipeline.yml
-│   └── assets/                 # SQL assets (added in a follow-up PR)
+│   └── assets/
+│       ├── staging/staging.cars.sql
+│       ├── dimensions/dim_*.sql
+│       └── facts/fact_car_listings.sql
 └── Cars dashboard.pdf          # Power BI dashboard export
 ```
 
@@ -118,10 +127,38 @@ A quick smoke-test (no live site needed) is available:
 docker compose run --rm --entrypoint python scrapy scripts/smoke_test_pipeline.py
 ```
 
+## Transformations (Bruin)
+
+The Bruin pipeline takes the flat `raw.cars` text dump and turns it into a
+star schema in the `marts` schema, with a `staging.cars` cleaned view in
+between:
+
+```
+raw.cars  ──►  staging.cars  ──►  marts.dim_*  ──►  marts.fact_car_listings
+```
+
+- **`staging.cars`** ([`bruin_pipeline/assets/staging/staging.cars.sql`](./bruin_pipeline/assets/staging/staging.cars.sql))
+  casts `price` and `km` to `INTEGER` (NULL on garbage), parses a 4-digit
+  `model_year` out of the free-text `used_since`, and trims +
+  title-cases all string columns.
+- **Dimensions** ([`bruin_pipeline/assets/dimensions/`](./bruin_pipeline/assets/dimensions/)):
+  `dim_make`, `dim_model` (carries `make_id`), `dim_fuel`,
+  `dim_transmission`, `dim_body_style`, `dim_color`, `dim_city`,
+  `dim_year`. Surrogate keys are generated deterministically with
+  `DENSE_RANK`. Each dim has a sentinel row (`id=0`, name `'Unknown'`)
+  so the fact table's FK columns can be `NOT NULL` even when the source
+  value is missing.
+- **`fact_car_listings`** ([`bruin_pipeline/assets/facts/fact_car_listings.sql`](./bruin_pipeline/assets/facts/fact_car_listings.sql))
+  joins all dimensions and exposes the measures (`price_egp`, `km`).
+
+Quality checks (`not_null`, `unique`, `non_negative`) are declared in the
+asset YAML headers and Bruin runs them automatically after each asset
+— see the `make transform` output for results.
+
 ## Roadmap
 
 - [x] Docker backbone: Postgres + pgAdmin + containerised Scrapy & Bruin
 - [x] PostgreSQL item pipeline (writes to `raw.cars`, upsert by link)
-- [ ] Bruin assets: `staging.cars` + dimension tables + `fact_car_listings`
-- [ ] Data-quality checks on the staging layer
+- [x] Bruin assets: `staging.cars` + dimension tables + `fact_car_listings`
+- [x] Data-quality checks on every layer
 - [ ] Refresh the Power BI dashboard against the star schema

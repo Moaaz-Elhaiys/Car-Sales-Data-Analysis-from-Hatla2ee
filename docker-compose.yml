@@ -56,9 +56,11 @@ services:
     profiles: ["tools"]
     env_file:
       - .env
-    working_dir: /pipeline
+    working_dir: /workspace
     volumes:
-      - ./bruin_pipeline:/pipeline
+      # Mount the whole repo so bruin can find the git root; the pipeline
+      # itself lives at /workspace/bruin_pipeline.
+      - .:/workspace
     depends_on:
       postgres:
         condition: service_healthy
