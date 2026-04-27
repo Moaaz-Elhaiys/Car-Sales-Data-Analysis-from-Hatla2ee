@@ -30,3 +30,4 @@ data/
 
 logs/runs
 logs/*.log
+.bruin.yml

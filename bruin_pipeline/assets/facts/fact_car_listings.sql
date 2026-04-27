@@ -69,6 +69,9 @@ columns:
     type: integer
     checks:
       - name: non_negative
+  - name: title
+    type: text
+    description: Free-text listing title from the source page.
   - name: scraped_at
     type: timestamptz
     checks:
