@@ -41,10 +41,21 @@ shell-scrapy: ## Open an interactive shell inside the scrapy container
 # Override with `make transform INCREMENTAL_DAYS=1` for tighter windows.
 INCREMENTAL_DAYS ?= 7
 
+# `date` flag flavour differs across platforms: GNU (Linux, WSL) uses `-d`,
+# BSD (macOS) uses `-v`. Detect once and stamp the right command into the
+# recipe so `make transform` works on either host without an extra container.
+ifeq ($(shell uname -s),Darwin)
+  DATE_DAYS_AGO = $$(date -u -v-$(INCREMENTAL_DAYS)d +%Y-%m-%d)
+  DATE_TOMORROW = $$(date -u -v+1d                  +%Y-%m-%d)
+else
+  DATE_DAYS_AGO = $$(date -u -d '$(INCREMENTAL_DAYS) days ago' +%Y-%m-%d)
+  DATE_TOMORROW = $$(date -u -d 'tomorrow'                     +%Y-%m-%d)
+endif
+
 transform: ## Incremental run — only re-process raw.cars rows updated in the last $INCREMENTAL_DAYS (default 7)
 	docker compose run --rm bruin run \
-	    --start-date $$(date -u -d '$(INCREMENTAL_DAYS) days ago' +%Y-%m-%d) \
-	    --end-date   $$(date -u -d 'tomorrow'           +%Y-%m-%d) \
+	    --start-date $(DATE_DAYS_AGO) \
+	    --end-date   $(DATE_TOMORROW) \
 	    /workspace/bruin_pipeline
 
 full-refresh: ## Rebuild the warehouse from scratch (drops + reloads every staging row)
