@@ -15,6 +15,12 @@ description: |
   run. New rows are inserted; existing rows whose source data changed
   (e.g. price drop) are updated in place.
 
+  Time zone: raw.cars.updated_at is `timestamptz` and is set by the
+  Postgres trigger in sql/init/02_raw_cars.sql via NOW(), which Postgres
+  stores as UTC. The Makefile derives the window boundaries with
+  `date -u`, so both sides of the comparison live in UTC and there's no
+  off-by-one-day risk around DST or local-time shifts.
+
   For a clean rebuild, run `make full-refresh` (which expands the window
   to cover all of raw.cars).
 
