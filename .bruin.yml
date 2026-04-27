@@ -1,0 +1,19 @@
+# Bruin connections config.
+#
+# These literal values match the docker-compose defaults shipped in
+# `.env.example`. Inside the docker network the postgres host is always
+# `postgres` and the port is 5432; if you customise POSTGRES_USER /
+# POSTGRES_PASSWORD / POSTGRES_DB in your `.env`, mirror the change here.
+default_environment: default
+
+environments:
+  default:
+    connections:
+      postgres:
+        - name: postgres-default
+          host: postgres
+          port: 5432
+          username: cars
+          password: cars
+          database: cars
+          ssl_mode: disable

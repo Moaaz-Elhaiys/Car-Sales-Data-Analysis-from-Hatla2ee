@@ -27,3 +27,6 @@ Thumbs.db
 # Data (do not commit scraped output going forward)
 data/
 *.jsonl
+
+logs/runs
+logs/*.log
