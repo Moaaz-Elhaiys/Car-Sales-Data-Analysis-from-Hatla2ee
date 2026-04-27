@@ -25,6 +25,9 @@ ROWS = [
     # Edge cases:
     ("https://example.com/seed/9",  "Used Chevy Optra",     "EGP 95,000", "chevy", "optra",  "petrol", "manual",    "white",  "Sedan",      "220 000","Used since 2010", "sedan", "  cairo "),
     ("https://example.com/seed/10", "Mystery car",          "",          None,    None,      None,     None,        None,     None,         None,     None,    None,        None),
+    # Regression: a real listing whose dimension values literally normalise to
+    # "Unknown" must not collide with the sentinel row in the dim tables.
+    ("https://example.com/seed/11", "Unknown brand",        "180000",    "unknown","unknown","Petrol", "Manual",    "Unknown","Sedan",      "100000", "2015", "Unknown",  "Unknown"),
 ]
 
 INSERT_SQL = """

@@ -3,7 +3,10 @@
 name: marts.dim_fuel
 type: pg.sql
 
-description: Fuel dimension. Includes a sentinel row (id=0, fuel='Unknown').
+description: |
+  Fuel dimension. Sentinel row (id=0, fuel='(Unknown)'). The parenthesised
+  literal cannot be produced by the INITCAP cleaning in staging.cars, so it
+  cannot collide with a real value.
 
 depends:
   - staging.cars
@@ -21,6 +24,7 @@ columns:
     type: text
     checks:
       - name: not_null
+      - name: unique
 
 @bruin */
 
@@ -28,6 +32,7 @@ WITH distinct_fuels AS (
     SELECT DISTINCT fuel
     FROM staging.cars
     WHERE fuel IS NOT NULL
+      AND fuel <> '(Unknown)'
 ),
 ranked AS (
     SELECT
@@ -35,6 +40,6 @@ ranked AS (
         fuel
     FROM distinct_fuels
 )
-SELECT 0::BIGINT AS fuel_id, 'Unknown' AS fuel
+SELECT 0::BIGINT AS fuel_id, '(Unknown)' AS fuel
 UNION ALL
 SELECT fuel_id, fuel FROM ranked

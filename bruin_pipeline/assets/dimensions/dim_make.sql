@@ -3,7 +3,11 @@
 name: marts.dim_make
 type: pg.sql
 
-description: Make dimension. Includes a sentinel row (id=0, make='Unknown').
+description: |
+  Make dimension. Includes a sentinel row (id=0, make='(Unknown)') used by
+  the fact table for listings whose source make was NULL. The parenthesised
+  literal can't be produced by the INITCAP cleaning in staging.cars, so it
+  cannot collide with a real value.
 
 depends:
   - staging.cars
@@ -21,6 +25,7 @@ columns:
     type: text
     checks:
       - name: not_null
+      - name: unique
 
 @bruin */
 
@@ -28,6 +33,7 @@ WITH distinct_makes AS (
     SELECT DISTINCT make
     FROM staging.cars
     WHERE make IS NOT NULL
+      AND make <> '(Unknown)'  -- defensive: never duplicate the sentinel
 ),
 ranked AS (
     SELECT
@@ -35,6 +41,6 @@ ranked AS (
         make
     FROM distinct_makes
 )
-SELECT 0::BIGINT AS make_id, 'Unknown' AS make
+SELECT 0::BIGINT AS make_id, '(Unknown)' AS make
 UNION ALL
 SELECT make_id, make FROM ranked

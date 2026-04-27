@@ -5,7 +5,12 @@ type: pg.sql
 
 description: |
   Model dimension. Carries make_id so the fact table only needs model_id.
-  Rows with a model but no make are linked to the 'Unknown' make sentinel.
+  Rows with a model but no make are linked to the '(Unknown)' make sentinel.
+  The parenthesised sentinel literal cannot be produced by INITCAP, so it
+  cannot collide with real input. Note: model alone is *not* unique (the
+  same model name can appear under different makes), so the unique check
+  is on `model_id` only — a `(model, make_id)` natural key is implicitly
+  unique by construction (DISTINCT in the CTE).
 
 depends:
   - staging.cars
@@ -38,6 +43,7 @@ WITH distinct_models AS (
     FROM staging.cars s
     LEFT JOIN marts.dim_make m ON m.make = s.make
     WHERE s.model IS NOT NULL
+      AND s.model <> '(Unknown)'  -- defensive: never duplicate the sentinel
 ),
 ranked AS (
     SELECT
@@ -46,6 +52,6 @@ ranked AS (
         make_id
     FROM distinct_models
 )
-SELECT 0::BIGINT AS model_id, 'Unknown' AS model, 0::BIGINT AS make_id
+SELECT 0::BIGINT AS model_id, '(Unknown)' AS model, 0::BIGINT AS make_id
 UNION ALL
 SELECT model_id, model, make_id FROM ranked
