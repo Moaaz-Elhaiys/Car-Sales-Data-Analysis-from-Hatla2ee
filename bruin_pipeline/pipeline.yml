@@ -1,0 +1,9 @@
+name: cars_pipeline
+schedule: daily
+default_connections:
+  postgres: postgres-default
+
+# Assets live under ./assets/ and are added in a follow-up PR:
+#   assets/staging/staging.cars.sql
+#   assets/dimensions/dim_*.sql
+#   assets/facts/fact_car_listings.sql
