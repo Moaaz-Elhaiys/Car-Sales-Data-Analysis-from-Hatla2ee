@@ -35,7 +35,7 @@ cp .env.example .env            # edit values if you want
 # 2. Bring up Postgres + pgAdmin
 make up
 
-# 3. (Next PR) Scrape listings into raw.cars
+# 3. Scrape listings into raw.cars
 make scrape
 
 # 4. (Next PR) Run Bruin transforms to build the star schema
@@ -99,10 +99,29 @@ On first connect in pgAdmin, register a new server with:
 └── Cars dashboard.pdf          # Power BI dashboard export
 ```
 
+## Ingestion
+
+The spider writes scraped items to `raw.cars` via
+[`cars/pipelines.py`](./cars/pipelines.py):
+
+- `CleanItemPipeline` trims whitespace from string fields.
+- `PostgresPipeline` upserts each item into `raw.cars`, keyed by `link`. Items
+  are batched (50 per flush) for fewer round-trips. Re-running the spider
+  updates existing rows in place and bumps `updated_at`.
+
+The table schema is in [`sql/init/02_raw_cars.sql`](./sql/init/02_raw_cars.sql)
+and is created automatically on first boot of the postgres container.
+
+A quick smoke-test (no live site needed) is available:
+
+```bash
+docker compose run --rm --entrypoint python scrapy scripts/smoke_test_pipeline.py
+```
+
 ## Roadmap
 
-- [x] Docker backbone (this PR): Postgres + pgAdmin + containerised Scrapy & Bruin
-- [ ] Replace the CSV feed with a PostgreSQL item pipeline (writes to `raw.cars`)
+- [x] Docker backbone: Postgres + pgAdmin + containerised Scrapy & Bruin
+- [x] PostgreSQL item pipeline (writes to `raw.cars`, upsert by link)
 - [ ] Bruin assets: `staging.cars` + dimension tables + `fact_car_listings`
 - [ ] Data-quality checks on the staging layer
 - [ ] Refresh the Power BI dashboard against the star schema

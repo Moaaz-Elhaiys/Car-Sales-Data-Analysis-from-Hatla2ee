@@ -63,11 +63,18 @@ CONCURRENT_REQUESTS = 1
 
 # Configure item pipelines
 # See https://docs.scrapy.org/en/latest/topics/item-pipeline.html
-#ITEM_PIPELINES = {
-#    "cars.pipelines.CarsPipeline": 300,     ### this number represet precedace here 300
-                                                        ### excuted first then 400
+ITEM_PIPELINES = {
+    "cars.pipelines.CleanItemPipeline": 300,
+    "cars.pipelines.PostgresPipeline": 400,
+}
 
-#}
+# Postgres connection (env vars override these defaults; see docker-compose.yml).
+POSTGRES_HOST = "postgres"
+POSTGRES_PORT = 5432
+POSTGRES_DB = "cars"
+POSTGRES_USER = "cars"
+POSTGRES_PASSWORD = "cars"
+POSTGRES_BATCH_SIZE = 50
 
 # Enable and configure the AutoThrottle extension (disabled by default)
 # See https://docs.scrapy.org/en/latest/topics/autothrottle.html

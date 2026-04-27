@@ -19,13 +19,6 @@ class CarsSpider(scrapy.Spider):
     start_urls = ["https://eg.hatla2ee.com/en/car"]
     seen_urls = set()
 
-    custom_settings = {
-        "FEEDS" :  {
-        "cars.csv" : {"format" : "csv", "append" : True } 
-            }
-    }
-
-
     def parse(self, response):
         base_url = "https://eg.hatla2ee.com"
 
