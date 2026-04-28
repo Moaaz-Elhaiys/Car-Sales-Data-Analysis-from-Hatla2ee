@@ -12,35 +12,50 @@ import sys
 import psycopg2
 from psycopg2.extras import execute_values
 
+# Columns: external_id, link, brand, model, price, condition, color, cc,
+#          location, origin_country, assembly_country,
+#          release_year, km, transmission, fuel
 ROWS = [
-    # link, title, price, make, model, fuel, transmission, color, class, km, used_since, body_style, city
-    ("https://example.com/seed/1",  "Toyota Corolla 2020",  "350000",  "Toyota",  "Corolla", "Petrol", "Automatic", "White",  "Sedan",      "120000", "2020", "Sedan",     "Cairo"),
-    ("https://example.com/seed/2",  "Toyota Corolla 2019",  "320000",  "Toyota",  "Corolla", "Petrol", "Manual",    "Silver", "Sedan",      "150000", "2019", "Sedan",     "Cairo"),
-    ("https://example.com/seed/3",  "Honda Civic 2021",     "420000",  "Honda",   "Civic",   "Petrol", "Automatic", "Black",  "Sedan",      "80000",  "2021", "Sedan",     "Giza"),
-    ("https://example.com/seed/4",  "Hyundai Elantra 2022", "500000",  "Hyundai", "Elantra", "Petrol", "Automatic", "Red",    "Sedan",      "40000",  "2022", "Sedan",     "Alexandria"),
-    ("https://example.com/seed/5",  "Kia Sportage 2020",    "650000",  "Kia",     "Sportage","Diesel", "Automatic", "Grey",   "SUV",        "70000",  "2020", "SUV",       "Cairo"),
-    ("https://example.com/seed/6",  "Nissan Sunny 2018",    "230000",  "Nissan",  "Sunny",   "Petrol", "Manual",    "Blue",   "Sedan",      "180000", "2018", "Sedan",     "Cairo"),
-    ("https://example.com/seed/7",  "BMW 320i 2017",        "750000",  "BMW",     "320i",    "Petrol", "Automatic", "Black",  "Sedan",      "100000", "2017", "Sedan",     "Giza"),
-    ("https://example.com/seed/8",  "Mercedes C200 2019",  "1100000",  "Mercedes","C200",    "Petrol", "Automatic", "White",  "Sedan",      "60000",  "2019", "Sedan",     "Alexandria"),
+    ("1001", "https://example.com/seed/1001", "Toyota",   "Corolla",  "350000",  "Used", "White",  "1600", "Cairo",      "Japan",   "Egypt",   "2020", "120000", "Automatic", "Petrol"),
+    ("1002", "https://example.com/seed/1002", "Toyota",   "Corolla",  "320000",  "Used", "Silver", "1600", "Cairo",      "Japan",   "Egypt",   "2019", "150000", "Manual",    "Petrol"),
+    ("1003", "https://example.com/seed/1003", "Honda",    "Civic",    "420000",  "Used", "Black",  "1800", "Giza",       "Japan",   "Japan",   "2021", "80000",  "Automatic", "Petrol"),
+    ("1004", "https://example.com/seed/1004", "Hyundai",  "Elantra",  "500000",  "Used", "Red",    "1600", "Alexandria", "Korea",   "Egypt",   "2022", "40000",  "Automatic", "Petrol"),
+    ("1005", "https://example.com/seed/1005", "Kia",      "Sportage", "650000",  "Used", "Grey",   "2000", "Cairo",      "Korea",   "Korea",   "2020", "70000",  "Automatic", "Diesel"),
+    ("1006", "https://example.com/seed/1006", "Nissan",   "Sunny",    "230000",  "Used", "Blue",   "1500", "Cairo",      "Japan",   "Egypt",   "2018", "180000", "Manual",    "Petrol"),
+    ("1007", "https://example.com/seed/1007", "BMW",      "320i",     "750000",  "Used", "Black",  "2000", "Giza",       "Germany", "Germany", "2017", "100000", "Automatic", "Petrol"),
+    ("1008", "https://example.com/seed/1008", "Mercedes", "C200",    "1100000",  "Used", "White",  "2000", "Alexandria", "Germany", "Germany", "2019", "60000",  "Automatic", "Petrol"),
     # Edge cases:
-    ("https://example.com/seed/9",  "Used Chevy Optra",     "EGP 95,000", "chevy", "optra",  "petrol", "manual",    "white",  "Sedan",      "220 000","Used since 2010", "sedan", "  cairo "),
-    ("https://example.com/seed/10", "Mystery car",          "",          None,    None,      None,     None,        None,     None,         None,     None,    None,        None),
-    # Regression: a real listing whose dimension values literally normalise to
-    # "Unknown" must not collide with the sentinel row in the dim tables.
-    ("https://example.com/seed/11", "Unknown brand",        "180000",    "unknown","unknown","Petrol", "Manual",    "Unknown","Sedan",      "100000", "2015", "Unknown",  "Unknown"),
+    # 1009 -- raw-ish values straight from a noisy scrape (mixed case, spaces).
+    ("1009", "https://example.com/seed/1009", "chevy",    "optra",   "EGP 95,000", "used", "white",  " 1600", "  cairo  ", "korea",   "egypt",   "2010", "220 000", "manual",    "petrol"),
+    # 1010 -- mostly-NULL row to exercise sentinel handling in the dim layer.
+    ("1010", "https://example.com/seed/1010", None,       None,       "",          None,   None,     None,    None,        None,      None,      None,   None,      None,        None),
+    # 1011 -- listing whose values literally normalise to "Unknown" must not
+    # collide with the sentinel rows added later in the dim tables.
+    ("1011", "https://example.com/seed/1011", "unknown",  "unknown",  "180000",   "Used", "Unknown", "1600", "Unknown",    "Unknown", "Unknown", "2015", "100000", "Manual",    "Petrol"),
 ]
 
 INSERT_SQL = """
 INSERT INTO raw.cars (
-    link, title, price, make, model, fuel, transmission,
-    color, class, km, used_since, body_style, city
+    external_id, link, brand, model, price, condition, color, cc,
+    location, origin_country, assembly_country,
+    release_year, km, transmission, fuel
 ) VALUES %s
 ON CONFLICT (link) DO UPDATE SET
-    title=EXCLUDED.title, price=EXCLUDED.price, make=EXCLUDED.make,
-    model=EXCLUDED.model, fuel=EXCLUDED.fuel, transmission=EXCLUDED.transmission,
-    color=EXCLUDED.color, class=EXCLUDED.class, km=EXCLUDED.km,
-    used_since=EXCLUDED.used_since, body_style=EXCLUDED.body_style, city=EXCLUDED.city,
-    updated_at=NOW();
+    external_id      = EXCLUDED.external_id,
+    brand            = EXCLUDED.brand,
+    model            = EXCLUDED.model,
+    price            = EXCLUDED.price,
+    condition        = EXCLUDED.condition,
+    color            = EXCLUDED.color,
+    cc               = EXCLUDED.cc,
+    location         = EXCLUDED.location,
+    origin_country   = EXCLUDED.origin_country,
+    assembly_country = EXCLUDED.assembly_country,
+    release_year     = EXCLUDED.release_year,
+    km               = EXCLUDED.km,
+    transmission     = EXCLUDED.transmission,
+    fuel             = EXCLUDED.fuel,
+    updated_at       = NOW();
 """
 
 

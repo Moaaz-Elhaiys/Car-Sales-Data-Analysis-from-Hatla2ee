@@ -5,7 +5,7 @@ ifeq (,$(wildcard .env))
 $(warning .env not found -- copy .env.example to .env before running targets that need it)
 endif
 
-.PHONY: help up down restart logs ps psql scrape shell-scrapy transform full-refresh bruin-validate seed-raw smoke-pipeline build clean
+.PHONY: help up down restart logs ps psql scrape shell-scrapy transform full-refresh bruin-validate seed-raw smoke-pipeline migrate build clean
 
 help: ## Show this help
 	@awk 'BEGIN {FS = ":.*##"; printf "\nUsage:\n  make \033[36m<target>\033[0m\n\nTargets:\n"} /^[a-zA-Z_-]+:.*?##/ { printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -71,6 +71,15 @@ seed-raw: ## Insert a small synthetic dataset into raw.cars (for testing transfo
 
 smoke-pipeline: ## Smoke-test the Scrapy item pipeline (no live site needed)
 	docker compose run --rm --entrypoint python scrapy scripts/smoke_test_pipeline.py
+
+smoke-parse: ## Smoke-test CarsSpider.parse_car_page against a synthetic detail page (no live site needed)
+	docker compose run --rm --entrypoint python scrapy scripts/smoke_test_spider_parse.py
+
+migrate: ## Apply pending sql/migrations/*.sql against the running postgres (idempotent)
+	@for f in $$(ls sql/migrations/*.sql 2>/dev/null | sort); do \
+	    echo "==> Applying $$f"; \
+	    docker compose exec -T postgres psql -U $${POSTGRES_USER:-cars} -d $${POSTGRES_DB:-cars} -v ON_ERROR_STOP=1 < $$f || exit 1; \
+	done
 
 clean: ## Stop containers and delete volumes (DESTROYS data)
 	docker compose down -v

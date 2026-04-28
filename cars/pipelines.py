@@ -12,9 +12,13 @@ logger = logging.getLogger(__name__)
 
 
 class CleanItemPipeline:
-    """Trim whitespace from string fields (kept from the original project)."""
+    """Trim whitespace from string fields.
 
-    SKIP_FIELDS = {"Title", "Price", "Link"}
+    Numeric/identity fields are skipped because the spider already normalises
+    them (digits-only) -- trimming there would be redundant.
+    """
+
+    SKIP_FIELDS = {"Link", "ExternalId", "Price", "Km", "CC"}
 
     def process_item(self, item, spider):
         adapter = ItemAdapter(item)
@@ -32,26 +36,31 @@ class PostgresPipeline:
 
     UPSERT_SQL = """
         INSERT INTO raw.cars (
-            link, title, price, make, model, fuel, transmission,
-            color, class, km, used_since, body_style, city
+            external_id, link, brand, model, price, condition, color, cc,
+            location, origin_country, assembly_country,
+            release_year, km, transmission, fuel
         ) VALUES (
-            %(link)s, %(title)s, %(price)s, %(make)s, %(model)s, %(fuel)s, %(transmission)s,
-            %(color)s, %(class)s, %(km)s, %(used_since)s, %(body_style)s, %(city)s
+            %(external_id)s, %(link)s, %(brand)s, %(model)s, %(price)s,
+            %(condition)s, %(color)s, %(cc)s, %(location)s,
+            %(origin_country)s, %(assembly_country)s,
+            %(release_year)s, %(km)s, %(transmission)s, %(fuel)s
         )
         ON CONFLICT (link) DO UPDATE SET
-            title        = EXCLUDED.title,
-            price        = EXCLUDED.price,
-            make         = EXCLUDED.make,
-            model        = EXCLUDED.model,
-            fuel         = EXCLUDED.fuel,
-            transmission = EXCLUDED.transmission,
-            color        = EXCLUDED.color,
-            class        = EXCLUDED.class,
-            km           = EXCLUDED.km,
-            used_since   = EXCLUDED.used_since,
-            body_style   = EXCLUDED.body_style,
-            city         = EXCLUDED.city,
-            updated_at   = NOW();
+            external_id      = EXCLUDED.external_id,
+            brand            = EXCLUDED.brand,
+            model            = EXCLUDED.model,
+            price            = EXCLUDED.price,
+            condition        = EXCLUDED.condition,
+            color            = EXCLUDED.color,
+            cc               = EXCLUDED.cc,
+            location         = EXCLUDED.location,
+            origin_country   = EXCLUDED.origin_country,
+            assembly_country = EXCLUDED.assembly_country,
+            release_year     = EXCLUDED.release_year,
+            km               = EXCLUDED.km,
+            transmission     = EXCLUDED.transmission,
+            fuel             = EXCLUDED.fuel,
+            updated_at       = NOW();
     """
 
     def __init__(self, host, port, dbname, user, password, batch_size):
@@ -109,19 +118,21 @@ class PostgresPipeline:
             return item
 
         row = {
-            "link":         link,
-            "title":        adapter.get("Title"),
-            "price":        adapter.get("Price"),
-            "make":         adapter.get("Make"),
-            "model":        adapter.get("Model"),
-            "fuel":         adapter.get("Fuel"),
-            "transmission": adapter.get("Transmission"),
-            "color":        adapter.get("Color"),
-            "class":        adapter.get("Class"),
-            "km":           adapter.get("Km"),
-            "used_since":   adapter.get("Used_since"),
-            "body_style":   adapter.get("Body_style"),
-            "city":         adapter.get("City"),
+            "external_id":      adapter.get("ExternalId"),
+            "link":             link,
+            "brand":            adapter.get("Brand"),
+            "model":            adapter.get("Model"),
+            "price":            adapter.get("Price"),
+            "condition":        adapter.get("Condition"),
+            "color":            adapter.get("Color"),
+            "cc":               adapter.get("CC"),
+            "location":         adapter.get("Location"),
+            "origin_country":   adapter.get("OriginCountry"),
+            "assembly_country": adapter.get("AssemblyCountry"),
+            "release_year":     adapter.get("ReleaseYear"),
+            "km":               adapter.get("Km"),
+            "transmission":     adapter.get("Transmission"),
+            "fuel":             adapter.get("Fuel"),
         }
         self._buffer.append(row)
 
@@ -144,5 +155,4 @@ class PostgresPipeline:
             )
             raise
         else:
-            logger.info("PostgresPipeline upserted %d rows into raw.cars", len(self._buffer))
             self._buffer.clear()
