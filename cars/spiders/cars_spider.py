@@ -10,6 +10,15 @@ from cars.items import CarItem
 # end of the path (or before a query string).
 EXTERNAL_ID_RE = re.compile(r"/(\d+)/?(?:[?#].*)?$")
 
+# A real hatla2ee detail-page URL has the shape:
+#   /en/car/<brand>/<model>/<numeric-id>
+# where <numeric-id> is at least 4 digits (real listing ids are 7+ digits;
+# we keep a small safety margin). Anything else -- brand index pages,
+# model index pages, location index pages, promo sub-categories like
+# `/kia/ceed/teraz/990` -- must NOT be followed, otherwise the spider
+# yields all-NULL items that pollute `raw.cars`.
+LISTING_URL_RE = re.compile(r"/en/car/[^/]+/[^/]+/\d{4,}/?(?:[?#].*)?$")
+
 DIGITS_RE = re.compile(r"\d[\d,]*")
 YEAR_RE = re.compile(r"^\d{4}$")
 KM_RE = re.compile(r"\d.*KM", re.IGNORECASE)
@@ -79,6 +88,10 @@ class CarsSpider(scrapy.Spider):
 
         for car_link in car_links:
             car_url = car_link if car_link.startswith("http") else base_url + car_link
+            # Skip non-listing anchors (brand/model/location index pages,
+            # promo sub-categories, etc). Only follow real detail URLs.
+            if not LISTING_URL_RE.search(car_url):
+                continue
             yield response.follow(
                 url=car_url,
                 callback=self.parse_car_page,
@@ -156,5 +169,16 @@ class CarsSpider(scrapy.Spider):
         item["Location"] = detail("Location")
         item["OriginCountry"] = detail("Origin Country")
         item["AssemblyCountry"] = detail("Assembly Country")
+
+        # Defence-in-depth: even if the URL filter in `parse` lets a
+        # non-listing page slip through (or the page renders but has no
+        # "Car Details" panel for some reason), drop the item rather than
+        # writing a row of NULLs into `raw.cars`. A real listing always has
+        # at least a Brand or a Price.
+        if not item.get("Brand") and not item.get("Price"):
+            self.logger.info(
+                "Dropping non-listing page (no Brand/Price): %s", response.url
+            )
+            return
 
         yield item

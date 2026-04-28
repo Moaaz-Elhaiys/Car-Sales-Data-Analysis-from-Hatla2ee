@@ -170,6 +170,42 @@ def main() -> int:
         got = _classify_chip(value)
         assert got == want, f"_classify_chip({value!r}) -> {got!r}, expected {want!r}"
     print("OK: _classify_chip handles copy variations + drops unknown chips.")
+
+    # --- Bonus: listing-URL filter ---
+    from cars.spiders.cars_spider import LISTING_URL_RE
+    listing_url_cases = [
+        # Real listing URLs (must match)
+        ("https://eg.hatla2ee.com/en/car/kia/sportage/7210056",      True),
+        ("https://eg.hatla2ee.com/en/car/volks-wagen/cc/7210036",    True),
+        ("https://eg.hatla2ee.com/en/car/renault/logan/7210017",     True),
+        ("https://eg.hatla2ee.com/en/car/kia/ceed/7210037/",         True),
+        ("https://eg.hatla2ee.com/en/car/kia/ceed/7210037?ref=foo",  True),
+        # Non-listing URLs (must NOT match)
+        ("https://eg.hatla2ee.com/en/car/volks-wagen/cc",            False),  # model index
+        ("https://eg.hatla2ee.com/en/car/volks-wagen",               False),  # brand index
+        ("https://eg.hatla2ee.com/en/car/renault/logan",             False),  # model index
+        ("https://eg.hatla2ee.com/en/car/kia/ceed",                  False),  # model index
+        ("https://eg.hatla2ee.com/en/car/city/6-october",            False),  # location index
+        ("https://eg.hatla2ee.com/en/car/kia/ceed/teraz/990",        False),  # promo sub-cat
+        ("https://eg.hatla2ee.com/en/car",                           False),  # root
+    ]
+    for url, want in listing_url_cases:
+        got = bool(LISTING_URL_RE.search(url))
+        assert got == want, f"LISTING_URL_RE.search({url!r}) -> {got}, expected {want}"
+    print("OK: LISTING_URL_RE accepts real detail URLs and rejects index/promo URLs.")
+
+    # --- Bonus: parse_car_page drops items with no Brand AND no Price ---
+    bare_html = "<html><body><h1>Not a real listing</h1></body></html>"
+    bare_url = "https://eg.hatla2ee.com/en/car/some/index"
+    bare_resp = HtmlResponse(
+        url=bare_url, body=bare_html.encode("utf-8"),
+        encoding="utf-8", request=Request(bare_url),
+    )
+    spider2 = CarsSpider()
+    bare_items = list(spider2.parse_car_page(bare_resp))
+    assert bare_items == [], f"expected no items from bare page, got {bare_items}"
+    print("OK: parse_car_page drops items with no Brand and no Price.")
+
     return 0
 
 
