@@ -6,7 +6,7 @@ type: pg.sql
 description: |
   Cleaned + typed view of raw.cars. Strings are trimmed and title-cased,
   numeric fields are cast (NULL on non-numeric), and a 4-digit model_year
-  is parsed out of the free-text used_since column.
+  is parsed out of release_year.
 
   Loaded incrementally with the `merge` strategy on `link` (the natural
   key). The source query filters raw.cars by `updated_at` against the run
@@ -36,8 +36,9 @@ columns:
     checks:
       - name: not_null
       - name: unique
-  - name: title
+  - name: external_id
     type: text
+    description: Numeric id parsed from the tail of the listing URL.
     update_on_merge: true
   - name: price_egp
     type: integer
@@ -51,14 +52,26 @@ columns:
     update_on_merge: true
     checks:
       - name: non_negative
+  - name: cc
+    type: integer
+    description: Engine displacement in cubic centimetres. NULL when raw cc is garbage.
+    update_on_merge: true
+    checks:
+      - name: non_negative
   - name: model_year
     type: integer
-    description: 4-digit year parsed from used_since. NULL if no year present.
+    description: 4-digit year parsed from release_year. NULL if no year present.
     update_on_merge: true
-  - name: make
+  - name: brand
     type: text
     update_on_merge: true
   - name: model
+    type: text
+    update_on_merge: true
+  - name: condition
+    type: text
+    update_on_merge: true
+  - name: color
     type: text
     update_on_merge: true
   - name: fuel
@@ -67,16 +80,13 @@ columns:
   - name: transmission
     type: text
     update_on_merge: true
-  - name: color
+  - name: location
     type: text
     update_on_merge: true
-  - name: class
+  - name: origin_country
     type: text
     update_on_merge: true
-  - name: body_style
-    type: text
-    update_on_merge: true
-  - name: city
+  - name: assembly_country
     type: text
     update_on_merge: true
   - name: scraped_at
@@ -95,21 +105,24 @@ columns:
 
 SELECT
     link,
-    NULLIF(BTRIM(title), '')                                          AS title,
+    NULLIF(BTRIM(external_id), '')                                              AS external_id,
     -- price: strip everything that isn't a digit, then cast; NULL if nothing left.
     NULLIF(REGEXP_REPLACE(COALESCE(price, ''), '[^0-9]', '', 'g'), '')::INTEGER AS price_egp,
     -- km: same idea.
     NULLIF(REGEXP_REPLACE(COALESCE(km, ''), '[^0-9]', '', 'g'), '')::INTEGER    AS km,
-    -- model_year: pull the first 4-digit run out of used_since.
-    NULLIF(SUBSTRING(COALESCE(used_since, '') FROM '\d{4}'), '')::INTEGER       AS model_year,
-    INITCAP(NULLIF(BTRIM(make), ''))                                  AS make,
-    INITCAP(NULLIF(BTRIM(model), ''))                                 AS model,
-    INITCAP(NULLIF(BTRIM(fuel), ''))                                  AS fuel,
-    INITCAP(NULLIF(BTRIM(transmission), ''))                          AS transmission,
-    INITCAP(NULLIF(BTRIM(color), ''))                                 AS color,
-    INITCAP(NULLIF(BTRIM(class), ''))                                 AS class,
-    INITCAP(NULLIF(BTRIM(body_style), ''))                            AS body_style,
-    INITCAP(NULLIF(BTRIM(city), ''))                                  AS city,
+    -- cc: same idea.
+    NULLIF(REGEXP_REPLACE(COALESCE(cc, ''), '[^0-9]', '', 'g'), '')::INTEGER    AS cc,
+    -- model_year: pull the first 4-digit run out of release_year.
+    NULLIF(SUBSTRING(COALESCE(release_year, '') FROM '\d{4}'), '')::INTEGER     AS model_year,
+    INITCAP(NULLIF(BTRIM(brand), ''))                                           AS brand,
+    INITCAP(NULLIF(BTRIM(model), ''))                                           AS model,
+    INITCAP(NULLIF(BTRIM(condition), ''))                                       AS condition,
+    INITCAP(NULLIF(BTRIM(color), ''))                                           AS color,
+    INITCAP(NULLIF(BTRIM(fuel), ''))                                            AS fuel,
+    INITCAP(NULLIF(BTRIM(transmission), ''))                                    AS transmission,
+    INITCAP(NULLIF(BTRIM(location), ''))                                        AS location,
+    INITCAP(NULLIF(BTRIM(origin_country), ''))                                  AS origin_country,
+    INITCAP(NULLIF(BTRIM(assembly_country), ''))                                AS assembly_country,
     scraped_at,
     updated_at
 FROM raw.cars
