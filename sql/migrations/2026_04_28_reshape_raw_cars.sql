@@ -50,8 +50,10 @@ END
 $$;
 
 -- 3. Backfill external_id from the URL tail.
+--    Mirror the spider's EXTERNAL_ID_RE: the id is the trailing /<digits>
+--    segment, optionally followed by '/', '?<query>', or '#<fragment>'.
 UPDATE raw.cars
-   SET external_id = SUBSTRING(link FROM '(\d+)/?$')
+   SET external_id = SUBSTRING(link FROM '/(\d+)(?:/|[?#]|$)')
  WHERE external_id IS NULL AND link IS NOT NULL;
 
 -- 4. Drop legacy columns we no longer scrape.

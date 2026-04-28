@@ -13,7 +13,15 @@ EXTERNAL_ID_RE = re.compile(r"/(\d+)/?(?:[?#].*)?$")
 DIGITS_RE = re.compile(r"\d[\d,]*")
 YEAR_RE = re.compile(r"^\d{4}$")
 KM_RE = re.compile(r"\d.*KM", re.IGNORECASE)
-TRANSMISSION_VALUES = {"automatic", "manual", "cvt", "tiptronic", "auto"}
+
+# Substring tokens (case-insensitive) that mark a top-chip as a transmission /
+# fuel value. Substring-matching makes us resilient to copy variations such as
+# "Automatic Transmission" or "Diesel Engine".
+TRANSMISSION_TOKENS = ("automatic", "manual", "cvt", "tiptronic", "semi-auto")
+FUEL_TOKENS = (
+    "gas", "gasoline", "petrol", "diesel", "hybrid", "electric",
+    "ev", "lpg", "cng", "natural gas",
+)
 
 
 def _digits_only(text: str | None) -> str | None:
@@ -30,7 +38,9 @@ def _classify_chip(value: str) -> str | None:
     """Return one of {"year", "km", "transmission", "fuel"} for a top-chip value.
 
     The four chips on a hatla2ee detail page have no textual labels (only icons),
-    so we infer the slot from the value's shape.
+    so we infer the slot from the value's shape. We only return a slot we
+    recognize; unknown chips are dropped (returning ``None``) so a future fifth
+    chip won't accidentally clobber `Fuel`.
     """
     v = value.strip()
     if not v:
@@ -39,9 +49,12 @@ def _classify_chip(value: str) -> str | None:
         return "year"
     if KM_RE.search(v):
         return "km"
-    if v.lower() in TRANSMISSION_VALUES:
+    lo = v.lower()
+    if any(tok in lo for tok in TRANSMISSION_TOKENS):
         return "transmission"
-    return "fuel"
+    if any(tok in lo for tok in FUEL_TOKENS):
+        return "fuel"
+    return None
 
 
 class CarsSpider(scrapy.Spider):
@@ -103,11 +116,14 @@ class CarsSpider(scrapy.Spider):
         ).get()
         item["Price"] = _digits_only(price_text)
 
-        # Top chips (year / km / transmission / fuel). The four chips share the
-        # same container shape: a flex pill with bg-gray-50, holding an icon
-        # div and a value span. We classify each by content.
+        # Top chips (year / km / transmission / fuel). Each chip is a flex pill
+        # with bg-gray-50 + rounded-md *and* a shrink-0 icon sibling -- the
+        # icon sibling is what disambiguates these from any other pill that
+        # happens to reuse the bg-gray-50 styling elsewhere on the page.
         chip_values = response.xpath(
-            "//div[contains(@class,'bg-gray-50') and contains(@class,'rounded-md')]"
+            "//div[contains(@class,'bg-gray-50')"
+            "      and contains(@class,'rounded-md')"
+            "      and .//div[contains(@class,'shrink-0')]]"
             "//div[contains(@class,'flex-col')]/span/text()"
         ).getall()
 

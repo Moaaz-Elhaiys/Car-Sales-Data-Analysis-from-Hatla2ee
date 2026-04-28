@@ -49,6 +49,7 @@ def main() -> int:
     cleaner = CleanItemPipeline()
 
     # --- Cleaner assertions (don't touch the DB) ---
+    # 1. String fields ARE trimmed.
     dirty = make_item("https://example.com/clean-check/9001", "9001",
                       Brand="Toyota ", Location=" Cairo ")
     cleaned = cleaner.process_item(dirty, None)
@@ -56,6 +57,19 @@ def main() -> int:
         f"CleanItemPipeline did not trim Brand: {cleaned['Brand']!r}"
     assert cleaned["Location"] == "Cairo", \
         f"CleanItemPipeline did not trim Location: {cleaned['Location']!r}"
+
+    # 2. Skipped numeric/identity fields are NOT altered (verified by passing
+    #    intentionally space-padded values and checking they survive).
+    skip_link = "  https://example.com/smoke/clean-check/9002  "
+    skip_item = make_item(skip_link, "  9002  ",
+                          Price="  500000  ", Km="  120000  ", CC="  1600  ")
+    skip_cleaned = cleaner.process_item(skip_item, None)
+    for field, want in (("Link", skip_link), ("ExternalId", "  9002  "),
+                        ("Price", "  500000  "), ("Km", "  120000  "),
+                        ("CC", "  1600  ")):
+        got = skip_cleaned[field]
+        assert got == want, \
+            f"CleanItemPipeline must not touch {field}: expected {want!r}, got {got!r}"
 
     # --- PostgresPipeline upsert behaviour ---
     # Run two separate "spider sessions" so the upsert lands in a later
@@ -72,12 +86,12 @@ def main() -> int:
             pg.close_spider(spider=None)
 
     run_session([
-        make_item("https://example.com/a/9101", "9101"),
-        make_item("https://example.com/b/9102", "9102", Brand="Honda", Model="Civic"),
+        make_item("https://example.com/smoke/a/9101", "9101"),
+        make_item("https://example.com/smoke/b/9102", "9102", Brand="Honda", Model="Civic"),
     ])
     run_session([
         # Upsert update: same link, new price.
-        make_item("https://example.com/a/9101", "9101", Price="450000"),
+        make_item("https://example.com/smoke/a/9101", "9101", Price="450000"),
     ])
 
     # Re-open a connection to verify the rows landed.
@@ -86,7 +100,7 @@ def main() -> int:
     try:
         pg2.cur.execute(
             "SELECT link, external_id, brand, model, price, scraped_at, updated_at "
-            "FROM raw.cars WHERE link LIKE 'https://example.com/%' ORDER BY id"
+            "FROM raw.cars WHERE link LIKE 'https://example.com/smoke/%' ORDER BY id"
         )
         rows = pg2.cur.fetchall()
         print(f"raw.cars now has {len(rows)} matching row(s):")
@@ -104,13 +118,13 @@ def main() -> int:
                 f"{link}: updated_at {updated_at!r} precedes scraped_at {scraped_at!r}"
             )
 
-        a_row = next(r for r in rows if r[0] == "https://example.com/a/9101")
+        a_row = next(r for r in rows if r[0] == "https://example.com/smoke/a/9101")
         assert a_row[4] == "450000", f"upsert did not update price; got {a_row[4]!r}"
         assert a_row[6] > a_row[5], (
             f"upsert did not bump updated_at: scraped_at={a_row[5]!r} updated_at={a_row[6]!r}"
         )
 
-        b_row = next(r for r in rows if r[0] == "https://example.com/b/9102")
+        b_row = next(r for r in rows if r[0] == "https://example.com/smoke/b/9102")
         assert b_row[5] == b_row[6], (
             f"row 'b' was not upserted but updated_at differs from scraped_at: "
             f"scraped_at={b_row[5]!r} updated_at={b_row[6]!r}"

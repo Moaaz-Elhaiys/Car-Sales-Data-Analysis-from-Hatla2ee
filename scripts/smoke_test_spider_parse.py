@@ -152,6 +152,24 @@ def main() -> int:
 
     print("OK: parse_car_page extracted all 15 fields correctly.")
     print("  ", dict(item))
+
+    # --- Bonus: classifier resilience checks ---
+    from cars.spiders.cars_spider import _classify_chip
+    classifier_cases = [
+        ("2026",                  "year"),
+        ("0 KM",                  "km"),
+        ("120,000 km",            "km"),
+        ("Automatic",             "transmission"),
+        ("Automatic Transmission", "transmission"),  # copy variation
+        ("MANUAL",                "transmission"),
+        ("Gas",                   "fuel"),
+        ("Diesel Engine",         "fuel"),            # copy variation
+        ("Some new chip",         None),              # unknown -> dropped
+    ]
+    for value, want in classifier_cases:
+        got = _classify_chip(value)
+        assert got == want, f"_classify_chip({value!r}) -> {got!r}, expected {want!r}"
+    print("OK: _classify_chip handles copy variations + drops unknown chips.")
     return 0
 
 
