@@ -83,9 +83,6 @@ columns:
   - name: location
     type: text
     update_on_merge: true
-  - name: origin_country
-    type: text
-    update_on_merge: true
   - name: assembly_country
     type: text
     update_on_merge: true
@@ -121,7 +118,9 @@ SELECT
     INITCAP(NULLIF(BTRIM(fuel), ''))                                            AS fuel,
     INITCAP(NULLIF(BTRIM(transmission), ''))                                    AS transmission,
     INITCAP(NULLIF(BTRIM(location), ''))                                        AS location,
-    INITCAP(NULLIF(BTRIM(origin_country), ''))                                  AS origin_country,
+    -- origin_country is intentionally NOT projected here: hatla2ee used-car
+    -- listings don't carry it. We derive origin from brand in marts.dim_brand
+    -- via a hardcoded mapping instead.
     INITCAP(NULLIF(BTRIM(assembly_country), ''))                                AS assembly_country,
     scraped_at,
     updated_at

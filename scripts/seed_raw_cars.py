@@ -26,7 +26,7 @@ ROWS = [
     ("1008", "https://example.com/seed/1008", "Mercedes", "C200",    "1100000",  "Used", "White",  "2000", "Alexandria", "Germany", "Germany", "2019", "60000",  "Automatic", "Petrol"),
     # Edge cases:
     # 1009 -- raw-ish values straight from a noisy scrape (mixed case, spaces).
-    ("1009", "https://example.com/seed/1009", "chevy",    "optra",   "EGP 95,000", "used", "white",  " 1600", "  cairo  ", "korea",   "egypt",   "2010", "220 000", "manual",    "petrol"),
+    ("1009", "https://example.com/seed/1009", "chevrolet","optra",   "EGP 95,000", "used", "white",  " 1600", "  cairo  ", "korea",   "egypt",   "2010", "220 000", "manual",    "petrol"),
     # 1010 -- mostly-NULL row to exercise sentinel handling in the dim layer.
     ("1010", "https://example.com/seed/1010", None,       None,       "",          None,   None,     None,    None,        None,      None,      None,   None,      None,        None),
     # 1011 -- listing whose values literally normalise to "Unknown" must not

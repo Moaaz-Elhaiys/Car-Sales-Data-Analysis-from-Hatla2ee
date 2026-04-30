@@ -22,7 +22,6 @@ depends:
   - marts.dim_fuel
   - marts.dim_transmission
   - marts.dim_location
-  - marts.dim_origin_country
   - marts.dim_assembly_country
   - marts.dim_year
 
@@ -63,10 +62,6 @@ columns:
     checks:
       - name: not_null
   - name: location_id
-    type: bigint
-    checks:
-      - name: not_null
-  - name: origin_country_id
     type: bigint
     checks:
       - name: not_null
@@ -112,7 +107,6 @@ SELECT
     COALESCE(df.fuel_id,             0)::BIGINT AS fuel_id,
     COALESCE(dt.transmission_id,     0)::BIGINT AS transmission_id,
     COALESCE(dloc.location_id,       0)::BIGINT AS location_id,
-    COALESCE(doc.origin_country_id,  0)::BIGINT AS origin_country_id,
     COALESCE(dac.assembly_country_id,0)::BIGINT AS assembly_country_id,
     COALESCE(dy.year_id,             0)::BIGINT AS year_id,
     s.price_egp,
@@ -129,6 +123,5 @@ LEFT JOIN marts.dim_color            dcol  ON dcol.color            = s.color
 LEFT JOIN marts.dim_fuel             df    ON df.fuel               = s.fuel
 LEFT JOIN marts.dim_transmission     dt    ON dt.transmission       = s.transmission
 LEFT JOIN marts.dim_location         dloc  ON dloc.location         = s.location
-LEFT JOIN marts.dim_origin_country   doc   ON doc.origin_country    = s.origin_country
 LEFT JOIN marts.dim_assembly_country dac   ON dac.assembly_country  = s.assembly_country
 LEFT JOIN marts.dim_year             dy    ON dy.model_year         = s.model_year
