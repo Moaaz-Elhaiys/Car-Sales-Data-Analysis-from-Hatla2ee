@@ -24,7 +24,7 @@ FUEL_TOKENS = (
 )
 
 
-def _digits_only(text: str | None) -> str | None:
+def _digits_only(text: str | None) -> str | None:  # sourcery skip: assign-if-exp, swap-if-else-branches, use-named-expression
     """Return the first numeric run in ``text`` with commas/spaces stripped."""
     if not text:
         return None
@@ -35,6 +35,7 @@ def _digits_only(text: str | None) -> str | None:
 
 
 def _classify_chip(value: str) -> str | None:
+    # sourcery skip: assign-if-exp, reintroduce-else
     """Return one of {"year", "km", "transmission", "fuel"} for a top-chip value.
 
     The four chips on a hatla2ee detail page have no textual labels (only icons),
@@ -78,6 +79,8 @@ class CarsSpider(scrapy.Spider):
         ).getall()
 
         for car_link in car_links:
+            if not EXTERNAL_ID_RE.search(car_link):
+                continue
             car_url = car_link if car_link.startswith("http") else base_url + car_link
             yield response.follow(
                 url=car_url,
@@ -86,9 +89,10 @@ class CarsSpider(scrapy.Spider):
             )
 
         next_page = response.xpath(
-            "//div[@class='pagination pagination-right']"
-            "//li[@class='active']/following-sibling::li[1]/a/@href"
-        ).get()
+                    "//ul[@data-slot='pagination-content']"
+                    "//li[a[@data-active='true']]/following-sibling::li/a/@href"
+                ).get()
+
         if next_page and "page" in next_page:
             next_page_url = base_url + next_page
             yield response.follow(

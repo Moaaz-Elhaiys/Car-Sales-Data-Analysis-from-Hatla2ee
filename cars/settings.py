@@ -19,7 +19,7 @@ DEFAULT_REQUEST_HEADERS = {
 ROBOTSTXT_OBEY = False
 
 # 3. Add a delay to look more human
-DOWNLOAD_DELAY = 3
+DOWNLOAD_DELAY = 2
 RANDOMIZE_DOWNLOAD_DELAY = True
 
 # 4. Enable cookies

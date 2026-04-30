@@ -41,7 +41,7 @@ columns:
     description: Numeric id parsed from the tail of the listing URL.
     update_on_merge: true
   - name: price_egp
-    type: integer
+    type: bigint
     description: Listing price in EGP. NULL when raw price is empty/garbage.
     update_on_merge: true
     checks:
@@ -107,7 +107,7 @@ SELECT
     link,
     NULLIF(BTRIM(external_id), '')                                              AS external_id,
     -- price: strip everything that isn't a digit, then cast; NULL if nothing left.
-    NULLIF(REGEXP_REPLACE(COALESCE(price, ''), '[^0-9]', '', 'g'), '')::INTEGER AS price_egp,
+    NULLIF(REGEXP_REPLACE(COALESCE(price, ''), '[^0-9]', '', 'g'), '')::BIGINT AS price_egp,
     -- km: same idea.
     NULLIF(REGEXP_REPLACE(COALESCE(km, ''), '[^0-9]', '', 'g'), '')::INTEGER    AS km,
     -- cc: same idea.

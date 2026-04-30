@@ -52,6 +52,7 @@ services:
 
   bruin:
     image: ghcr.io/bruin-data/bruin:latest
+    platform: linux/amd64
     container_name: cars-bruin
     profiles: ["tools"]
     env_file:

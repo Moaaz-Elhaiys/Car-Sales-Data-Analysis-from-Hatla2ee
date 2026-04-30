@@ -27,7 +27,7 @@ Thumbs.db
 # Data (do not commit scraped output going forward)
 data/
 *.jsonl
-
+*.csv
 logs/runs
 logs/*.log
 .bruin.yml
