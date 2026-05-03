@@ -153,6 +153,20 @@ columns:
 
 @bruin */
 
+-- staging.cars is keyed on link (its merge primary_key), so the same
+-- listing can appear under multiple URL variants (trailing slash, query
+-- string, ...). external_id is the fact-table PK -- collapse any
+-- duplicates here, keeping the freshest row per id (latest updated_at,
+-- breaking ties on scraped_at). Without this dedup, the fact's
+-- external_id.unique quality check fails whenever raw.cars holds two
+-- URLs for the same listing id.
+WITH staging_dedup AS (
+    SELECT DISTINCT ON (s.external_id) s.*
+    FROM staging.cars s
+    WHERE s.external_id IS NOT NULL
+      AND s.external_id ~ '^\d+$'
+    ORDER BY s.external_id, s.updated_at DESC, s.scraped_at DESC
+)
 SELECT
     s.external_id::BIGINT                       AS external_id,
     COALESCE(db.brand_id,            0)::BIGINT AS brand_id,
@@ -175,11 +189,7 @@ SELECT
     NULL::INTEGER AS used_since,
     s.scraped_at,
     s.updated_at
-FROM staging.cars s
--- external_id is the fact-table PK; rows missing it can't be merged
--- safely. The spider's URL filter (PR #5) guarantees a numeric tail on
--- every listing it accepts, so this filter is defence-in-depth -- it
--- also drops the all-NULL seed row used to exercise sentinel handling.
+FROM staging_dedup s
 LEFT JOIN marts.dim_brand            db    ON db.brand              = s.brand
 LEFT JOIN marts.dim_model            dmd   ON dmd.model             = s.model
                                           AND dmd.brand_id          = COALESCE(db.brand_id, 0)
@@ -192,5 +202,3 @@ LEFT JOIN marts.dim_assembly_country dac   ON dac.assembly_country  = s.assembly
 LEFT JOIN marts.dim_year             dy    ON dy.model_year         = s.model_year
 WHERE s.updated_at >= '{{ start_timestamp }}'
   AND s.updated_at <  '{{ end_timestamp }}'
-  AND s.external_id IS NOT NULL
-  AND s.external_id ~ '^\d+$'
