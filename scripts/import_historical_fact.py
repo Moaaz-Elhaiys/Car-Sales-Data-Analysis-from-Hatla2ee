@@ -1,4 +1,4 @@
-"""One-shot importer that appends historical fact rows from a CSV.
+"""Append historical fact rows from a CSV onto marts.fact_car_listings.
 
 Run inside the scrapy container after `make full-refresh` has built the
 fact table:
@@ -15,18 +15,16 @@ The CSV is expected to carry pre-resolved dim FKs (brand_id, model_id,
 location_id, ...) that already line up with the current marts.dim_*
 tables. Columns recognised:
 
-    external_id       (REQUIRED, natural key, numeric -- listing id from
-                       the tail of the hatla2ee URL)
     brand_id, model_id, color_id, fuel_id, transmission_id,
     location_id, year_id
     price_egp, km
     body_style          (text, nullable)
     used_since          (year, nullable, e.g. "2014")
 
-The `link` column may also be present in the CSV -- it is silently
-ignored. external_id is the natural identity of a listing on hatla2ee
-(URLs can change, the numeric id doesn't), so the fact table keys on
-external_id alone.
+Any `link` or `external_id` column in the CSV is silently ignored --
+the fact table no longer carries either; rows are identified only by
+the surrogate `id` column generated from
+marts.fact_car_listings_id_seq.
 
 Anything else in the CSV is silently ignored. Missing columns are
 filled with sensible defaults:
@@ -37,11 +35,15 @@ filled with sensible defaults:
                                            -- well outside any normal
                                            -- incremental sweep window so
                                            -- `make transform` won't try
-                                           -- to re-merge them.
+                                           -- to touch them.
 
-Idempotent: dedupes via `WHERE NOT EXISTS` on external_id. Re-running
-the script after `make full-refresh` (which wipes the fact table)
-restores the same set of historical rows.
+NOT IDEMPOTENT. Re-running this script appends another full copy of
+the CSV. If you want to re-import, first run:
+
+    docker compose exec postgres psql -U cars -d cars \
+        -c "TRUNCATE marts.fact_car_listings;"
+
+(or rebuild the table with `make full-refresh`).
 """
 
 from __future__ import annotations
@@ -54,19 +56,19 @@ from datetime import datetime, timezone
 from typing import Any
 
 import psycopg2
+from psycopg2.extras import execute_values
 
 # Anchor historical rows well before any realistic spider sweep window so
 # `make transform` (which filters staging.cars by updated_at over the last
-# N days) never tries to re-merge them.
+# N days) never picks them up.
 HISTORIC_TS = datetime(2020, 1, 1, tzinfo=timezone.utc)
 
-# Bruin's merge strategy doesn't create a UNIQUE constraint on the natural
-# key (the `unique` quality check is a SELECT-time validation, not a DB
-# constraint). Use NOT EXISTS for application-level dedup so we don't
-# depend on a constraint that may not be there.
+# Single batch INSERT using nextval() per row so spider-driven inserts
+# (the Bruin asset, also using nextval on the same sequence) and historical
+# inserts share one monotonic id space without coordinating.
 INSERT_SQL = """
 INSERT INTO marts.fact_car_listings (
-    external_id,
+    id,
     brand_id, model_id, condition_id, color_id, fuel_id,
     transmission_id, location_id, assembly_country_id, year_id,
     price_egp, km, cc,
@@ -74,16 +76,30 @@ INSERT INTO marts.fact_car_listings (
     scraped_at, updated_at
 )
 SELECT
-    %(external_id)s,
-    %(brand_id)s, %(model_id)s, %(condition_id)s, %(color_id)s, %(fuel_id)s,
-    %(transmission_id)s, %(location_id)s, %(assembly_country_id)s, %(year_id)s,
-    %(price_egp)s, %(km)s, %(cc)s,
-    %(body_style)s, %(used_since)s,
-    %(scraped_at)s, %(updated_at)s
-WHERE NOT EXISTS (
-    SELECT 1 FROM marts.fact_car_listings WHERE external_id = %(external_id)s
+    nextval('marts.fact_car_listings_id_seq'),
+    v.brand_id::BIGINT, v.model_id::BIGINT, v.condition_id::BIGINT,
+    v.color_id::BIGINT, v.fuel_id::BIGINT, v.transmission_id::BIGINT,
+    v.location_id::BIGINT, v.assembly_country_id::BIGINT, v.year_id::BIGINT,
+    v.price_egp::BIGINT, v.km::INTEGER, v.cc::INTEGER,
+    v.body_style::TEXT, v.used_since::INTEGER,
+    v.scraped_at::TIMESTAMPTZ, v.updated_at::TIMESTAMPTZ
+FROM (VALUES %s) AS v(
+    brand_id, model_id, condition_id, color_id, fuel_id,
+    transmission_id, location_id, assembly_country_id, year_id,
+    price_egp, km, cc,
+    body_style, used_since,
+    scraped_at, updated_at
 );
 """
+
+# Order of values in each tuple must match the (VALUES %s) column list above.
+ROW_KEYS = (
+    "brand_id", "model_id", "condition_id", "color_id", "fuel_id",
+    "transmission_id", "location_id", "assembly_country_id", "year_id",
+    "price_egp", "km", "cc",
+    "body_style", "used_since",
+    "scraped_at", "updated_at",
+)
 
 
 def _clean(val: Any) -> str | None:
@@ -113,20 +129,17 @@ def _to_int_default(val: Any, default: int) -> int:
     return parsed if parsed is not None else default
 
 
-def build_row(raw: dict[str, Any]) -> dict[str, Any] | None:
-    """Map one CSV record to fact_car_listings parameters. Returns None if invalid.
+def build_row(raw: dict[str, Any], scraped_at: datetime = HISTORIC_TS) -> dict[str, Any]:
+    """Map one CSV record to fact_car_listings parameters.
 
-    A row is invalid if external_id is missing or non-numeric -- it's the
-    not-null PK of the fact table, so we can't insert without it.
+    Returns a dict with the fact-table columns; never None (since the
+    fact is append-only with a surrogate id, no row can be 'invalid'
+    beyond what the dim/measure defaults already cover).
 
-    Any `link` column in the CSV is silently dropped -- the fact table no
-    longer carries it; external_id is the only natural key.
+    Any `link` or `external_id` column in the CSV is silently dropped --
+    the fact table no longer carries either.
     """
-    external_id = _to_int(raw.get("external_id"))
-    if external_id is None:
-        return None
     return {
-        "external_id":         external_id,
         # FK columns: default to sentinel id=0 if missing/garbled so the
         # not_null quality checks on the fact table never fire.
         "brand_id":            _to_int_default(raw.get("brand_id"),            0),
@@ -146,8 +159,8 @@ def build_row(raw: dict[str, Any]) -> dict[str, Any] | None:
         "body_style":          _clean(raw.get("body_style")),
         "used_since":          _to_int(raw.get("used_since")),
         # Anchor timestamps so incremental runs ignore these rows.
-        "scraped_at":          HISTORIC_TS,
-        "updated_at":          HISTORIC_TS,
+        "scraped_at":          scraped_at,
+        "updated_at":          scraped_at,
     }
 
 
@@ -159,28 +172,46 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Parse and validate the CSV without touching the database.",
     )
+    ap.add_argument(
+        "--scraped-at",
+        default=None,
+        help=(
+            "ISO timestamp to stamp on every row's scraped_at/updated_at."
+            " Defaults to 2020-01-01 UTC (well outside any incremental"
+            " sweep). Mostly useful for tests."
+        ),
+    )
     args = ap.parse_args(argv)
 
     if not os.path.exists(args.csv):
         sys.stderr.write(f"CSV not found: {args.csv}\n")
         return 2
 
+    if args.scraped_at:
+        try:
+            scraped_at = datetime.fromisoformat(args.scraped_at)
+            if scraped_at.tzinfo is None:
+                scraped_at = scraped_at.replace(tzinfo=timezone.utc)
+        except ValueError:
+            sys.stderr.write(f"Invalid --scraped-at: {args.scraped_at!r}\n")
+            return 2
+    else:
+        scraped_at = HISTORIC_TS
+
+    sys.stderr.write(
+        "WARNING: import_historical_fact.py is NOT idempotent. Each run"
+        " appends another full copy of the CSV. To re-import, first"
+        " TRUNCATE marts.fact_car_listings (or run `make full-refresh`).\n"
+    )
+    sys.stderr.flush()
+
     parsed: list[dict[str, Any]] = []
-    skipped_blank = 0
     with open(args.csv, newline="", encoding="utf-8") as fh:
         reader = csv.DictReader(fh)
         for raw in reader:
-            row = build_row(raw)
-            if row is None:
-                skipped_blank += 1
-                continue
-            parsed.append(row)
+            parsed.append(build_row(raw, scraped_at=scraped_at))
 
-    print(
-        f"Parsed {len(parsed)} candidate rows from {args.csv}"
-        f" (skipped {skipped_blank} with missing/non-numeric external_id).",
-        flush=True,
-    )
+    print(f"Parsed {len(parsed)} rows from {args.csv}.", flush=True)
 
     if args.dry_run:
         print("--dry-run: skipping database insert.")
@@ -198,20 +229,18 @@ def main(argv: list[str] | None = None) -> int:
         password=os.getenv("POSTGRES_PASSWORD", "cars"),
     )
     try:
-        inserted = 0
         with conn, conn.cursor() as cur:
-            for row in parsed:
-                cur.execute(INSERT_SQL, row)
-                inserted += cur.rowcount
+            tuples = [tuple(row[k] for k in ROW_KEYS) for row in parsed]
+            execute_values(cur, INSERT_SQL, tuples, page_size=1000)
+            inserted = cur.rowcount  # not always reliable across drivers; treat as best-effort
             cur.execute("SELECT COUNT(*) FROM marts.fact_car_listings;")
             (total,) = cur.fetchone()
     finally:
         conn.close()
 
-    skipped_existing = len(parsed) - inserted
+    # `inserted` is best-effort; we always processed len(parsed) input rows.
     print(
-        f"Inserted {inserted} new rows;"
-        f" skipped {skipped_existing} that already existed."
+        f"Appended {len(parsed)} rows."
         f" marts.fact_car_listings now holds {total} rows."
     )
     return 0
