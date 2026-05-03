@@ -78,8 +78,11 @@ smoke-parse: ## Smoke-test CarsSpider.parse_car_page against a synthetic detail 
 smoke-import-historical: ## Smoke-test scripts/import_historical_fact.py end-to-end (writes/cleans temp rows)
 	docker compose run --rm --entrypoint python scrapy scripts/smoke_test_historical_import.py
 
-# Import a historical fact-table CSV (one-shot append, idempotent).
-# WARNING: `make full-refresh` wipes the fact table; re-run this after any full-refresh.
+# Append a historical fact-table CSV onto marts.fact_car_listings.
+# WARNING: NOT idempotent. Each run appends another full copy of the CSV --
+# fact_car_listings has a surrogate id PK and no natural-key dedup. To
+# re-import, first run `make full-refresh` (rebuilds the fact from staging)
+# or TRUNCATE marts.fact_car_listings manually.
 # CSV path is relative to the repo root; the scrapy container already bind-mounts
 # the repo at /app, so `data/foo.csv` on the host becomes `/app/data/foo.csv` inside.
 CSV ?= data/historical_fact.csv
