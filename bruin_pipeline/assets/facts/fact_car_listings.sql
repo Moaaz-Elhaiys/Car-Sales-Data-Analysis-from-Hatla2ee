@@ -13,6 +13,32 @@ description: |
   raw cc values have high cardinality vs. analytical value and slicing by
   exact engine displacement is uncommon.
 
+  body_style and used_since are *historical-only* attributes carried over
+  from a previous pipeline export (see scripts/import_historical_fact.py).
+  The current spider does not capture them, so for spider-driven rows
+  these columns are always NULL. They have no `update_on_merge` flag, so
+  the merge UPDATE never overwrites a CSV-loaded value with a NULL when
+  the spider re-scrapes the same external_id.
+
+  Loaded incrementally with the `merge` strategy on `external_id` (cast
+  to BIGINT, the numeric tail of every hatla2ee listing URL and the
+  natural identity of a listing on their side). `link` is intentionally
+  *not* a column on this fact table -- URLs can change shape (paths,
+  query strings, fragments) while the numeric listing id is stable, so
+  external_id is the more reliable join key for downstream Power BI
+  models.
+
+  The source query filters staging.cars by updated_at against the run
+  window, so scheduled re-runs only touch rows the spider modified since
+  the last run. CSV-loaded historical rows have no matching staging.cars
+  row, so the merge never touches them -- they live in the table as long
+  as the table itself does.
+
+  WARNING: `make full-refresh` drops and rebuilds the table from staging
+  alone. Any rows previously inserted by import_historical_fact.py are
+  wiped and must be re-imported. The import script is idempotent
+  (`WHERE NOT EXISTS` on external_id), so re-running it is safe.
+
 depends:
   - staging.cars
   - marts.dim_brand
@@ -27,79 +53,108 @@ depends:
 
 materialization:
   type: table
+  strategy: merge
 
 columns:
-  - name: link
-    type: text
+  - name: external_id
+    type: bigint
+    description: |
+      Numeric listing id from hatla2ee, parsed from the tail of the
+      listing URL. This is the fact-table primary key and the merge
+      key for both spider-driven incremental loads and the historical
+      CSV importer.
+    primary_key: true
     checks:
       - name: not_null
       - name: unique
-  - name: external_id
-    type: text
-    description: Numeric id parsed from the tail of the listing URL.
   - name: brand_id
     type: bigint
+    update_on_merge: true
     checks:
       - name: not_null
   - name: model_id
     type: bigint
+    update_on_merge: true
     checks:
       - name: not_null
   - name: condition_id
     type: bigint
+    update_on_merge: true
     checks:
       - name: not_null
   - name: color_id
     type: bigint
+    update_on_merge: true
     checks:
       - name: not_null
   - name: fuel_id
     type: bigint
+    update_on_merge: true
     checks:
       - name: not_null
   - name: transmission_id
     type: bigint
+    update_on_merge: true
     checks:
       - name: not_null
   - name: location_id
     type: bigint
+    update_on_merge: true
     checks:
       - name: not_null
   - name: assembly_country_id
     type: bigint
+    update_on_merge: true
     checks:
       - name: not_null
   - name: year_id
     type: bigint
+    update_on_merge: true
     checks:
       - name: not_null
   - name: price_egp
-    type: integer
+    type: bigint
+    update_on_merge: true
     checks:
       - name: non_negative
   - name: km
     type: integer
+    update_on_merge: true
     checks:
       - name: non_negative
   - name: cc
     type: integer
     description: Engine displacement in cubic centimetres. Measure (no FK).
+    update_on_merge: true
     checks:
       - name: non_negative
+  - name: body_style
+    type: text
+    description: |
+      Body style (Hatchback, Sedan, ...). Historical-only -- carried in
+      from import_historical_fact.py. NULL for spider-driven rows. Not
+      flagged update_on_merge so a spider re-scrape of the same
+      external_id doesn't overwrite it with NULL.
+  - name: used_since
+    type: integer
+    description: |
+      First-use year (e.g. 2014) from the historical export. Historical-
+      only; NULL for spider-driven rows. Not flagged update_on_merge.
   - name: scraped_at
     type: timestamptz
+    update_on_merge: true
     checks:
       - name: not_null
   - name: updated_at
     type: timestamptz
+    update_on_merge: true
     checks:
       - name: not_null
 
 @bruin */
 
 SELECT
-    s.link,
-    s.external_id,
+    s.external_id::BIGINT                       AS external_id,
     COALESCE(db.brand_id,            0)::BIGINT AS brand_id,
     COALESCE(dmd.model_id,           0)::BIGINT AS model_id,
     COALESCE(dcond.condition_id,     0)::BIGINT AS condition_id,
@@ -112,9 +167,19 @@ SELECT
     s.price_egp,
     s.km,
     s.cc,
+    -- body_style / used_since are historical-only; the spider does not
+    -- capture them. We project NULL so the SELECT shape matches the
+    -- declared columns; without `update_on_merge` on those columns the
+    -- merge UPDATE never overwrites a CSV-loaded value with this NULL.
+    NULL::TEXT    AS body_style,
+    NULL::INTEGER AS used_since,
     s.scraped_at,
     s.updated_at
 FROM staging.cars s
+-- external_id is the fact-table PK; rows missing it can't be merged
+-- safely. The spider's URL filter (PR #5) guarantees a numeric tail on
+-- every listing it accepts, so this filter is defence-in-depth -- it
+-- also drops the all-NULL seed row used to exercise sentinel handling.
 LEFT JOIN marts.dim_brand            db    ON db.brand              = s.brand
 LEFT JOIN marts.dim_model            dmd   ON dmd.model             = s.model
                                           AND dmd.brand_id          = COALESCE(db.brand_id, 0)
@@ -125,3 +190,7 @@ LEFT JOIN marts.dim_transmission     dt    ON dt.transmission       = s.transmis
 LEFT JOIN marts.dim_location         dloc  ON dloc.location         = s.location
 LEFT JOIN marts.dim_assembly_country dac   ON dac.assembly_country  = s.assembly_country
 LEFT JOIN marts.dim_year             dy    ON dy.model_year         = s.model_year
+WHERE s.updated_at >= '{{ start_timestamp }}'
+  AND s.updated_at <  '{{ end_timestamp }}'
+  AND s.external_id IS NOT NULL
+  AND s.external_id ~ '^\d+$'
