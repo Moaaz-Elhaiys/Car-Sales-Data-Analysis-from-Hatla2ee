@@ -155,21 +155,28 @@ columns:
 
 -- staging.cars is keyed on link (its merge primary_key), so the same
 -- listing can appear under multiple URL variants (trailing slash, query
--- string, ...). external_id is the fact-table PK -- collapse any
--- in-window duplicates here, keeping the freshest row per id (latest
--- updated_at, then scraped_at, then link as a deterministic
--- tiebreaker). The updated_at window filter MUST live inside the CTE:
--- if it lived in the outer WHERE, a backfill of an old window could
--- pick an out-of-window newer row that the outer filter then drops,
--- silently losing the listing from the rebuild.
+-- string, leading zeros on the id, ...). external_id is the fact-table
+-- PK as BIGINT -- collapse any in-window duplicates here, keeping the
+-- freshest row per id (latest updated_at, then scraped_at, then link
+-- as a deterministic tiebreaker).
+--
+-- Dedup MUST happen on the BIGINT-cast value, not the raw text: e.g.
+-- '7012961' and '07012961' are different strings but the same id, and
+-- text-only DISTINCT ON keeps both, leading to a duplicate-PK failure
+-- in the fact's external_id.unique check.
+--
+-- The updated_at window filter also lives inside the CTE: if it lived
+-- only in the outer WHERE, a backfill of an old window could pick an
+-- out-of-window newer row that the outer filter then drops, silently
+-- losing the listing from the rebuild.
 WITH staging_dedup AS (
-    SELECT DISTINCT ON (s.external_id) s.*
+    SELECT DISTINCT ON (s.external_id::BIGINT) s.*
     FROM staging.cars s
     WHERE s.external_id IS NOT NULL
       AND s.external_id ~ '^\d+$'
       AND s.updated_at >= '{{ start_timestamp }}'
       AND s.updated_at <  '{{ end_timestamp }}'
-    ORDER BY s.external_id, s.updated_at DESC, s.scraped_at DESC, s.link
+    ORDER BY s.external_id::BIGINT, s.updated_at DESC, s.scraped_at DESC, s.link
 )
 SELECT
     s.external_id::BIGINT                       AS external_id,
