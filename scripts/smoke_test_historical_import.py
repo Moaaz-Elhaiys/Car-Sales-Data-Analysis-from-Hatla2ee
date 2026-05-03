@@ -1,17 +1,19 @@
 """End-to-end smoke test for scripts/import_historical_fact.py.
 
 Builds a temp CSV mirroring the real export schema (the fields in the
-user's pandas dataframe: link, external_id, brand_id, model_id,
+user's pandas dataframe: link [ignored], external_id, brand_id, model_id,
 condition_id missing, color_id, fuel_id, km, price_egp, year_id,
 transmission_id, location_id, body_style, used_since), feeds it through
 the importer, and verifies the rows landed in marts.fact_car_listings
 with sane defaults filled in.
 
 Also exercises:
-  - idempotency (second run inserts 0 new rows, dedups by link)
+  - idempotency (second run inserts 0 new rows, dedups by external_id)
   - co-existence with spider/staging-driven rows (incremental run after
-    import does NOT touch CSV rows whose links aren't in staging.cars)
-  - body_style + used_since survive a subsequent merge on the same link
+    import does NOT touch CSV rows whose external_ids aren't in
+    staging.cars)
+  - body_style + used_since survive a subsequent merge on the same
+    external_id
 
 Run inside the scrapy container after `make full-refresh`:
     docker compose run --rm \
@@ -33,36 +35,44 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import import_historical_fact as importer  # noqa: E402
 
 
+# Use external_ids well above any seed/spider id range so the test rows
+# don't collide with real data even when the table is non-empty.
+TEST_EXTERNAL_IDS = (9_999_990, 9_999_991, 9_999_992)
+
 FIXTURE_ROWS = [
-    # Mirror the user's pandas dtypes: body_style/used_since/external_id are
-    # strings; FK columns are ints; some body_style values are blank (NaN
-    # in pandas, surfaces as empty string when to_csv'd without na_rep).
+    # Mirror the user's pandas dtypes: external_id arrives as a string,
+    # FK columns as ints; some body_style values are blank (NaN in pandas
+    # surfaces as empty string when to_csv'd without na_rep). The `link`
+    # column is included to prove the importer ignores it.
     {
         "body_style": "",  # NaN in pandas
         "location_id": 41, "color_id": 20, "fuel_id": 3, "km": 256000,
-        "link": "https://example.com/historical/7013138",
+        "link": "https://example.com/historical/9999990",
         "brand_id": 105, "model_id": 743, "price_egp": 860000, "year_id": 48,
-        "transmission_id": 1, "used_since": "2014", "external_id": "7013138",
+        "transmission_id": 1, "used_since": "2014",
+        "external_id": str(TEST_EXTERNAL_IDS[0]),
     },
     {
         "body_style": "",
         "location_id": 0, "color_id": 42, "fuel_id": 3, "km": 160000,
-        "link": "https://example.com/historical/7013128",
+        "link": "https://example.com/historical/9999991",
         "brand_id": 21, "model_id": 654, "price_egp": 250000, "year_id": 47,
-        "transmission_id": 2, "used_since": "2013", "external_id": "7013128",
+        "transmission_id": 2, "used_since": "2013",
+        "external_id": str(TEST_EXTERNAL_IDS[1]),
     },
     {
         "body_style": "Hatchback",
         "location_id": 106, "color_id": 42, "fuel_id": 1, "km": 200000,
-        "link": "https://example.com/historical/7013020",
+        "link": "https://example.com/historical/9999992",
         "brand_id": 76, "model_id": 191, "price_egp": 480000, "year_id": 42,
-        "transmission_id": 1, "used_since": "2008", "external_id": "7013020",
+        "transmission_id": 1, "used_since": "2008",
+        "external_id": str(TEST_EXTERNAL_IDS[2]),
     },
-    # Edge case: blank link must be skipped, not crash.
+    # Edge case: blank external_id must be skipped, not crash.
     {
         "body_style": "Sedan",
         "location_id": 0, "color_id": 0, "fuel_id": 0, "km": "",
-        "link": "",
+        "link": "https://example.com/historical/blank",
         "brand_id": 0, "model_id": 0, "price_egp": "", "year_id": 0,
         "transmission_id": 0, "used_since": "", "external_id": "",
     },
@@ -87,8 +97,8 @@ def _connect():
 
 def _count_test_rows(cur) -> int:
     cur.execute(
-        "SELECT COUNT(*) FROM marts.fact_car_listings WHERE link LIKE %s;",
-        ("https://example.com/historical/%",),
+        "SELECT COUNT(*) FROM marts.fact_car_listings WHERE external_id = ANY(%s);",
+        (list(TEST_EXTERNAL_IDS),),
     )
     (n,) = cur.fetchone()
     return n
@@ -96,8 +106,8 @@ def _count_test_rows(cur) -> int:
 
 def _cleanup(cur):
     cur.execute(
-        "DELETE FROM marts.fact_car_listings WHERE link LIKE %s;",
-        ("https://example.com/historical/%",),
+        "DELETE FROM marts.fact_car_listings WHERE external_id = ANY(%s);",
+        (list(TEST_EXTERNAL_IDS),),
     )
 
 
@@ -137,9 +147,9 @@ def main() -> int:
                 SELECT brand_id, model_id, condition_id, assembly_country_id,
                        cc, body_style, used_since, scraped_at, updated_at
                 FROM marts.fact_car_listings
-                WHERE link = %s;
+                WHERE external_id = %s;
                 """,
-                ("https://example.com/historical/7013020",),
+                (TEST_EXTERNAL_IDS[2],),  # the Hatchback row
             )
             row = cur.fetchone()
             (brand_id, model_id, condition_id, assembly_country_id,
@@ -156,12 +166,12 @@ def main() -> int:
 
             # 4. Verify NaN-in-pandas surfaces as NULL body_style.
             cur.execute(
-                "SELECT body_style FROM marts.fact_car_listings WHERE link = %s;",
-                ("https://example.com/historical/7013138",),
+                "SELECT body_style FROM marts.fact_car_listings WHERE external_id = %s;",
+                (TEST_EXTERNAL_IDS[0],),
             )
             assert_eq(cur.fetchone()[0], None, "blank body_style -> NULL")
 
-        # 5. Second import: should insert 0 (all dedup'd by link).
+        # 5. Second import: should insert 0 (all dedup'd by external_id).
         rc = importer.main(["--csv", tmp.name])
         assert_eq(rc, 0, "second import exit code")
 

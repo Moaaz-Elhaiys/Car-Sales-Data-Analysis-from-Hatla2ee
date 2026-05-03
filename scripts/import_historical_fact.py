@@ -15,13 +15,18 @@ The CSV is expected to carry pre-resolved dim FKs (brand_id, model_id,
 location_id, ...) that already line up with the current marts.dim_*
 tables. Columns recognised:
 
-    link              (REQUIRED, natural key)
-    external_id
+    external_id       (REQUIRED, natural key, numeric -- listing id from
+                       the tail of the hatla2ee URL)
     brand_id, model_id, color_id, fuel_id, transmission_id,
     location_id, year_id
     price_egp, km
     body_style          (text, nullable)
     used_since          (year, nullable, e.g. "2014")
+
+The `link` column may also be present in the CSV -- it is silently
+ignored. external_id is the natural identity of a listing on hatla2ee
+(URLs can change, the numeric id doesn't), so the fact table keys on
+external_id alone.
 
 Anything else in the CSV is silently ignored. Missing columns are
 filled with sensible defaults:
@@ -34,9 +39,9 @@ filled with sensible defaults:
                                            -- `make transform` won't try
                                            -- to re-merge them.
 
-Idempotent: ON CONFLICT (link) DO NOTHING. Re-running the script after
-`make full-refresh` (which wipes the fact table) restores the same set
-of historical rows.
+Idempotent: dedupes via `WHERE NOT EXISTS` on external_id. Re-running
+the script after `make full-refresh` (which wipes the fact table)
+restores the same set of historical rows.
 """
 
 from __future__ import annotations
@@ -61,7 +66,7 @@ HISTORIC_TS = datetime(2020, 1, 1, tzinfo=timezone.utc)
 # depend on a constraint that may not be there.
 INSERT_SQL = """
 INSERT INTO marts.fact_car_listings (
-    link, external_id,
+    external_id,
     brand_id, model_id, condition_id, color_id, fuel_id,
     transmission_id, location_id, assembly_country_id, year_id,
     price_egp, km, cc,
@@ -69,14 +74,14 @@ INSERT INTO marts.fact_car_listings (
     scraped_at, updated_at
 )
 SELECT
-    %(link)s, %(external_id)s,
+    %(external_id)s,
     %(brand_id)s, %(model_id)s, %(condition_id)s, %(color_id)s, %(fuel_id)s,
     %(transmission_id)s, %(location_id)s, %(assembly_country_id)s, %(year_id)s,
     %(price_egp)s, %(km)s, %(cc)s,
     %(body_style)s, %(used_since)s,
     %(scraped_at)s, %(updated_at)s
 WHERE NOT EXISTS (
-    SELECT 1 FROM marts.fact_car_listings WHERE link = %(link)s
+    SELECT 1 FROM marts.fact_car_listings WHERE external_id = %(external_id)s
 );
 """
 
@@ -109,13 +114,19 @@ def _to_int_default(val: Any, default: int) -> int:
 
 
 def build_row(raw: dict[str, Any]) -> dict[str, Any] | None:
-    """Map one CSV record to fact_car_listings parameters. Returns None if invalid."""
-    link = _clean(raw.get("link"))
-    if not link:
+    """Map one CSV record to fact_car_listings parameters. Returns None if invalid.
+
+    A row is invalid if external_id is missing or non-numeric -- it's the
+    not-null PK of the fact table, so we can't insert without it.
+
+    Any `link` column in the CSV is silently dropped -- the fact table no
+    longer carries it; external_id is the only natural key.
+    """
+    external_id = _to_int(raw.get("external_id"))
+    if external_id is None:
         return None
     return {
-        "link":                link,
-        "external_id":         _clean(raw.get("external_id")),
+        "external_id":         external_id,
         # FK columns: default to sentinel id=0 if missing/garbled so the
         # not_null quality checks on the fact table never fire.
         "brand_id":            _to_int_default(raw.get("brand_id"),            0),
@@ -167,7 +178,7 @@ def main(argv: list[str] | None = None) -> int:
 
     print(
         f"Parsed {len(parsed)} candidate rows from {args.csv}"
-        f" (skipped {skipped_blank} with no link).",
+        f" (skipped {skipped_blank} with missing/non-numeric external_id).",
         flush=True,
     )
 
