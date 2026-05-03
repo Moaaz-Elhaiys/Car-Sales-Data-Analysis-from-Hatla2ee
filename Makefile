@@ -5,7 +5,7 @@ ifeq (,$(wildcard .env))
 $(warning .env not found -- copy .env.example to .env before running targets that need it)
 endif
 
-.PHONY: help up down restart logs ps psql scrape shell-scrapy transform full-refresh bruin-validate seed-raw smoke-pipeline migrate build clean
+.PHONY: help up down restart logs ps psql scrape shell-scrapy transform full-refresh bruin-validate seed-raw smoke-pipeline migrate build clean import-historical
 
 help: ## Show this help
 	@awk 'BEGIN {FS = ":.*##"; printf "\nUsage:\n  make \033[36m<target>\033[0m\n\nTargets:\n"} /^[a-zA-Z_-]+:.*?##/ { printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -74,6 +74,17 @@ smoke-pipeline: ## Smoke-test the Scrapy item pipeline (no live site needed)
 
 smoke-parse: ## Smoke-test CarsSpider.parse_car_page against a synthetic detail page (no live site needed)
 	docker compose run --rm --entrypoint python scrapy scripts/smoke_test_spider_parse.py
+
+smoke-import-historical: ## Smoke-test scripts/import_historical_fact.py end-to-end (writes/cleans temp rows)
+	docker compose run --rm --entrypoint python scrapy scripts/smoke_test_historical_import.py
+
+# Import a historical fact-table CSV (one-shot append, idempotent).
+# WARNING: `make full-refresh` wipes the fact table; re-run this after any full-refresh.
+# CSV path is relative to the repo root; the scrapy container already bind-mounts
+# the repo at /app, so `data/foo.csv` on the host becomes `/app/data/foo.csv` inside.
+CSV ?= data/historical_fact.csv
+import-historical: ## One-shot append historical rows to marts.fact_car_listings (CSV=path/to/file.csv)
+	docker compose run --rm --entrypoint python scrapy scripts/import_historical_fact.py --csv $(CSV)
 
 migrate: ## Apply pending sql/migrations/*.sql against the running postgres (idempotent)
 	@for f in $$(ls sql/migrations/*.sql 2>/dev/null | sort); do \

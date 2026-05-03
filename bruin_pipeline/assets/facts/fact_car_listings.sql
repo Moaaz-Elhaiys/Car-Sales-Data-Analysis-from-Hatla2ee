@@ -13,6 +13,25 @@ description: |
   raw cc values have high cardinality vs. analytical value and slicing by
   exact engine displacement is uncommon.
 
+  body_style and used_since are *historical-only* attributes carried over
+  from a previous pipeline export (see scripts/import_historical_fact.py).
+  The current spider does not capture them, so for spider-driven rows
+  these columns are always NULL. They have no `update_on_merge` flag, so
+  the merge UPDATE never overwrites a CSV-loaded value with a NULL when
+  the spider re-scrapes the same link.
+
+  Loaded incrementally with the `merge` strategy on `link`. The source
+  query filters staging.cars by updated_at against the run window, so
+  scheduled re-runs only touch rows the spider modified since the last
+  run. CSV-loaded historical rows have no matching staging.cars row, so
+  the merge never touches them -- they live in the table as long as the
+  table itself does.
+
+  WARNING: `make full-refresh` drops and rebuilds the table from staging
+  alone. Any rows previously inserted by import_historical_fact.py are
+  wiped and must be re-imported. The import script is idempotent
+  (ON CONFLICT (link) DO NOTHING), so re-running it is safe.
+
 depends:
   - staging.cars
   - marts.dim_brand
@@ -27,71 +46,99 @@ depends:
 
 materialization:
   type: table
+  strategy: merge
 
 columns:
   - name: link
     type: text
+    primary_key: true
     checks:
       - name: not_null
       - name: unique
   - name: external_id
     type: text
     description: Numeric id parsed from the tail of the listing URL.
+    update_on_merge: true
   - name: brand_id
     type: bigint
+    update_on_merge: true
     checks:
       - name: not_null
   - name: model_id
     type: bigint
+    update_on_merge: true
     checks:
       - name: not_null
   - name: condition_id
     type: bigint
+    update_on_merge: true
     checks:
       - name: not_null
   - name: color_id
     type: bigint
+    update_on_merge: true
     checks:
       - name: not_null
   - name: fuel_id
     type: bigint
+    update_on_merge: true
     checks:
       - name: not_null
   - name: transmission_id
     type: bigint
+    update_on_merge: true
     checks:
       - name: not_null
   - name: location_id
     type: bigint
+    update_on_merge: true
     checks:
       - name: not_null
   - name: assembly_country_id
     type: bigint
+    update_on_merge: true
     checks:
       - name: not_null
   - name: year_id
     type: bigint
+    update_on_merge: true
     checks:
       - name: not_null
   - name: price_egp
-    type: integer
+    type: bigint
+    update_on_merge: true
     checks:
       - name: non_negative
   - name: km
     type: integer
+    update_on_merge: true
     checks:
       - name: non_negative
   - name: cc
     type: integer
     description: Engine displacement in cubic centimetres. Measure (no FK).
+    update_on_merge: true
     checks:
       - name: non_negative
+  - name: body_style
+    type: text
+    description: |
+      Body style (Hatchback, Sedan, ...). Historical-only -- carried in
+      from import_historical_fact.py. NULL for spider-driven rows. Not
+      flagged update_on_merge so spider re-scrapes don't overwrite it.
+  - name: used_since
+    type: integer
+    description: |
+      First-use year (e.g. 2014) from the historical export. Historical-
+      only; NULL for spider-driven rows. Not flagged update_on_merge.
   - name: scraped_at
     type: timestamptz
+    update_on_merge: true
     checks:
       - name: not_null
   - name: updated_at
     type: timestamptz
+    update_on_merge: true
     checks:
       - name: not_null
 
@@ -112,6 +159,12 @@ SELECT
     s.price_egp,
     s.km,
     s.cc,
+    -- body_style / used_since are historical-only; the spider does not
+    -- capture them. We project NULL so the SELECT shape matches the
+    -- declared columns; without `update_on_merge` on those columns the
+    -- merge UPDATE never overwrites a CSV-loaded value with this NULL.
+    NULL::TEXT    AS body_style,
+    NULL::INTEGER AS used_since,
     s.scraped_at,
     s.updated_at
 FROM staging.cars s
@@ -125,3 +178,5 @@ LEFT JOIN marts.dim_transmission     dt    ON dt.transmission       = s.transmis
 LEFT JOIN marts.dim_location         dloc  ON dloc.location         = s.location
 LEFT JOIN marts.dim_assembly_country dac   ON dac.assembly_country  = s.assembly_country
 LEFT JOIN marts.dim_year             dy    ON dy.model_year         = s.model_year
+WHERE s.updated_at >= '{{ start_timestamp }}'
+  AND s.updated_at <  '{{ end_timestamp }}'
