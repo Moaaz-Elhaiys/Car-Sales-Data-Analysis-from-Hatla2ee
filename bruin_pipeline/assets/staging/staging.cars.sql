@@ -142,72 +142,139 @@ SELECT
     brand,
     -- Per-brand model rollup. Most brands keep model_raw as-is. Brands
     -- with high model-variant noise (e.g. Mercedes -- 100+ rows for
-    -- ~25 actual model families) get collapsed to family names so
-    -- dim_model and downstream charts aren't dominated by trim levels.
+    -- ~25 actual model families; BMW -- 60+ rows for ~20) get
+    -- collapsed to family names so dim_model and downstream charts
+    -- aren't dominated by trim levels.
     --
     -- ADDING A NEW BRAND ROLLUP:
-    --   1. Add a WHEN block below for the brand.
-    --   2. Decide overrides (special-case strings) and a fallback rule
-    --      (the prefix-before-first-digit-or-space heuristic works for
-    --      most letter-and-number naming conventions).
-    --
-    -- Mercedes rollup: ~106 distinct model strings -> ~25 families.
-    -- Pattern: take the leading non-digit, non-space prefix as the
-    -- family identifier ("C 200" -> "C", "Cla 45 Amg" -> "Cla", "G63"
-    -- -> "G"), then map known prefixes to human-friendly names. Pure
-    -- numeric models ("180", "500") -> "Classic". A small override
-    -- table handles the strings the heuristic mishandles.
+    --   1. Add a WHEN block in the outer CASE below for the brand.
+    --   2. Decide overrides (special-case strings) and a fallback
+    --      rule. Prefix-before-first-digit-or-space works for
+    --      letter-and-number naming (Mercedes); first-digit-of-the-
+    --      number for series-numbered brands (BMW); prefix-LIKE for
+    --      brands with a few noisy variants (Hyundai, Volkswagen).
     CASE
-        WHEN brand <> 'Mercedes' THEN model_raw
+        --
+        -- Mercedes rollup: ~106 distinct model strings -> ~25 families.
+        -- Pattern: take the leading non-digit, non-space prefix as the
+        -- family identifier ("C 200" -> "C", "Cla 45 Amg" -> "Cla",
+        -- "G63" -> "G"), then map known prefixes to human-friendly
+        -- names. Pure numeric models ("180", "500") -> "Classic". A
+        -- small override table handles the strings the heuristic
+        -- mishandles.
+        --
+        WHEN brand = 'Mercedes' THEN
+            CASE
+                -- Mercedes overrides (heuristic-doesn't-fit cases)
+                WHEN model_raw = 'Sel'                       THEN 'S-Class'
+                WHEN model_raw IN ('Amg Gt', 'Gt 43')        THEN 'AMG GT'
+                WHEN model_raw IN ('Maybach', 'Maybach Gls') THEN 'Maybach'
+                WHEN model_raw IN ('Viano', 'Vito')          THEN 'V-Class / Vans'
+                WHEN model_raw = 'Other'                     THEN 'Other'
+                -- Mercedes heuristic: prefix-to-family lookup
+                ELSE COALESCE(
+                    CASE BTRIM(SUBSTRING(model_raw FROM '^[^0-9 ]+'))
+                        WHEN 'A'   THEN 'A-Class'
+                        WHEN 'B'   THEN 'B-Class'
+                        WHEN 'C'   THEN 'C-Class'
+                        WHEN 'E'   THEN 'E-Class'
+                        WHEN 'S'   THEN 'S-Class'
+                        WHEN 'V'   THEN 'V-Class / Vans'
+                        WHEN 'G'   THEN 'G-Class'
+                        WHEN 'Gl'  THEN 'GL-Class'
+                        WHEN 'Gla' THEN 'GLA'
+                        WHEN 'Glb' THEN 'GLB'
+                        WHEN 'Glc' THEN 'GLC'
+                        WHEN 'Gle' THEN 'GLE'
+                        WHEN 'Glk' THEN 'GLK'
+                        WHEN 'Gls' THEN 'GLS'
+                        WHEN 'Cla' THEN 'CLA'
+                        WHEN 'Cle' THEN 'CLE'
+                        WHEN 'Cls' THEN 'CLS'
+                        WHEN 'Sl'  THEN 'SL'
+                        WHEN 'Slc' THEN 'SLC'
+                        WHEN 'Slk' THEN 'SLK'
+                        WHEN 'Eqa' THEN 'EQA'
+                        WHEN 'Eqb' THEN 'EQB'
+                        WHEN 'Eqe' THEN 'EQE'
+                        WHEN 'Eqs' THEN 'EQS'
+                        WHEN 'Eqv' THEN 'EQV'
+                        ELSE NULL  -- unmapped prefix; fall through to fallback
+                    END,
+                    -- pure-numeric / blank model -> "Classic" (W123/W124-era
+                    -- names like "180", "200", "500")
+                    CASE WHEN BTRIM(SUBSTRING(model_raw FROM '^[^0-9 ]+')) IS NULL
+                         THEN 'Classic'
+                    END,
+                    -- Final fallback: keep the prefix verbatim. Should be rare
+                    -- in practice; means a Mercedes string we haven't seen
+                    -- before. Surfacing it here makes it easy to spot in the
+                    -- dashboard and add to the table above.
+                    BTRIM(SUBSTRING(model_raw FROM '^[^0-9 ]+'))
+                )
+            END
 
-        -- Mercedes overrides (heuristic-doesn't-fit cases)
-        WHEN model_raw = 'Sel'                            THEN 'S-Class'
-        WHEN model_raw IN ('Amg Gt', 'Gt 43')             THEN 'AMG GT'
-        WHEN model_raw IN ('Maybach', 'Maybach Gls')      THEN 'Maybach'
-        WHEN model_raw IN ('Viano', 'Vito')               THEN 'V-Class / Vans'
-        WHEN model_raw = 'Other'                          THEN 'Other'
+        --
+        -- BMW rollup: ~61 distinct model strings -> ~20 families.
+        -- Pattern: BMW's numbered series share their hundreds digit
+        -- (320/330/340 are all 3-Series; 530/535 are 5-Series). The
+        -- rollup recognizes this plus the M / X / i / iX / Z
+        -- sub-brands.
+        --
+        WHEN brand = 'Bmw' THEN
+            CASE
+                -- BMW overrides
+                WHEN model_raw = 'Other'                                       THEN 'Other'
+                WHEN model_raw = 'Gran Coupe'                                  THEN 'Gran Coupe'
+                -- "1 Series" / "3 Series" / etc. already named -> keep as-is
+                WHEN model_raw ~ '^[1-8] Series$'                              THEN model_raw
+                -- M Series (M3, M4, M5, M235i, M850): performance sub-brand
+                WHEN model_raw ~ '^M[0-9]'                                     THEN 'M Series'
+                -- X SUVs (X1..X7, including M variants like X3 M / X4m / X5 M)
+                WHEN model_raw ~ '^X[1-7]'                                     THEN 'X' || SUBSTRING(model_raw FROM 2 FOR 1)
+                -- i electric (I3, I4, I5, I7): roll into one "i Series" family
+                WHEN model_raw ~ '^I[0-9]+$'                                   THEN 'i Series'
+                -- iX electric SUV (Ix, Ix1, Ix3): roll into one "iX" family
+                WHEN model_raw ~ '^Ix'                                         THEN 'iX'
+                -- Z roadsters (Z4, Z4 M40)
+                WHEN model_raw ~ '^Z[0-9]'                                     THEN 'Z' || SUBSTRING(model_raw FROM 2 FOR 1)
+                -- Numbered model: hundreds digit = series number (116/118
+                -- -> 1 Series; 320/330/340 -> 3 Series; 530 E / 760i -> 5/7)
+                WHEN model_raw ~ '^[1-8][0-9][0-9]'                            THEN SUBSTRING(model_raw FROM 1 FOR 1) || ' Series'
+                -- Fallback: pass through unrecognized strings
+                ELSE model_raw
+            END
 
-        -- Mercedes heuristic: prefix-to-family lookup
-        ELSE COALESCE(
-            CASE BTRIM(SUBSTRING(model_raw FROM '^[^0-9 ]+'))
-                WHEN 'A'   THEN 'A-Class'
-                WHEN 'B'   THEN 'B-Class'
-                WHEN 'C'   THEN 'C-Class'
-                WHEN 'E'   THEN 'E-Class'
-                WHEN 'S'   THEN 'S-Class'
-                WHEN 'V'   THEN 'V-Class / Vans'
-                WHEN 'G'   THEN 'G-Class'
-                WHEN 'Gl'  THEN 'GL-Class'
-                WHEN 'Gla' THEN 'GLA'
-                WHEN 'Glb' THEN 'GLB'
-                WHEN 'Glc' THEN 'GLC'
-                WHEN 'Gle' THEN 'GLE'
-                WHEN 'Glk' THEN 'GLK'
-                WHEN 'Gls' THEN 'GLS'
-                WHEN 'Cla' THEN 'CLA'
-                WHEN 'Cle' THEN 'CLE'
-                WHEN 'Cls' THEN 'CLS'
-                WHEN 'Sl'  THEN 'SL'
-                WHEN 'Slc' THEN 'SLC'
-                WHEN 'Slk' THEN 'SLK'
-                WHEN 'Eqa' THEN 'EQA'
-                WHEN 'Eqb' THEN 'EQB'
-                WHEN 'Eqe' THEN 'EQE'
-                WHEN 'Eqs' THEN 'EQS'
-                WHEN 'Eqv' THEN 'EQV'
-                ELSE NULL  -- unmapped prefix; fall through to fallback
-            END,
-            -- pure-numeric / blank model -> "Classic" (W123/W124-era
-            -- names like "180", "200", "500")
-            CASE WHEN BTRIM(SUBSTRING(model_raw FROM '^[^0-9 ]+')) IS NULL
-                 THEN 'Classic'
-            END,
-            -- Final fallback: keep the prefix verbatim. Should be rare
-            -- in practice; means a Mercedes string we haven't seen
-            -- before. Surfacing it here makes it easy to spot in the
-            -- dashboard and add to the table above.
-            BTRIM(SUBSTRING(model_raw FROM '^[^0-9 ]+'))
-        )
+        --
+        -- Hyundai rollup: ~45 -> ~37. Conservative; only collapsing
+        -- the obvious noisy variant explosions (Accent / Elantra /
+        -- Tucson / H Series). Avante stays separate from Elantra (it's
+        -- the same car under a different market badge but the listings
+        -- use different names; treating them as one would lose the
+        -- search distinction for buyers).
+        --
+        WHEN brand = 'Hyundai' THEN
+            CASE
+                WHEN model_raw LIKE 'Accent%'    THEN 'Accent'
+                WHEN model_raw LIKE 'Elantra%'   THEN 'Elantra'
+                WHEN model_raw LIKE 'Tucson%'    THEN 'Tucson'
+                WHEN model_raw IN ('H1', 'H100') THEN 'H Series'
+                ELSE model_raw
+            END
+
+        --
+        -- Volkswagen rollup: ~38 -> ~26. Golf has 9 generations as
+        -- distinct rows (Golf, Golf 2..8, Golf R) and ID has 5
+        -- variants (Id 4 / Id 6 / Id Unyx / Id3 / Id7).
+        --
+        WHEN brand = 'Volkswagen' THEN
+            CASE
+                WHEN model_raw LIKE 'Golf%' THEN 'Golf'
+                WHEN model_raw LIKE 'Id%'   THEN 'ID Series'
+                ELSE model_raw
+            END
+
+        ELSE model_raw
     END                                                   AS model,
     condition,
     color,
