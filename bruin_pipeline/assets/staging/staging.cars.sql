@@ -100,30 +100,121 @@ columns:
 
 @bruin */
 
+-- Cleaned source columns. We compute the title-cased brand/model first so
+-- the per-brand model rollup below can match against canonical strings
+-- rather than re-running BTRIM/INITCAP a dozen times.
+WITH cleaned AS (
+    SELECT
+        link,
+        NULLIF(BTRIM(external_id), '')                                              AS external_id,
+        -- price: strip everything that isn't a digit, then cast; NULL if nothing left.
+        NULLIF(REGEXP_REPLACE(COALESCE(price, ''), '[^0-9]', '', 'g'), '')::BIGINT  AS price_egp,
+        -- km: same idea.
+        NULLIF(REGEXP_REPLACE(COALESCE(km, ''), '[^0-9]', '', 'g'), '')::INTEGER    AS km,
+        -- cc: same idea.
+        NULLIF(REGEXP_REPLACE(COALESCE(cc, ''), '[^0-9]', '', 'g'), '')::INTEGER    AS cc,
+        -- model_year: pull the first 4-digit run out of release_year.
+        NULLIF(SUBSTRING(COALESCE(release_year, '') FROM '\d{4}'), '')::INTEGER     AS model_year,
+        INITCAP(NULLIF(BTRIM(brand), ''))                                           AS brand,
+        INITCAP(NULLIF(BTRIM(model), ''))                                           AS model_raw,
+        INITCAP(NULLIF(BTRIM(condition), ''))                                       AS condition,
+        INITCAP(NULLIF(BTRIM(color), ''))                                           AS color,
+        INITCAP(NULLIF(BTRIM(fuel), ''))                                            AS fuel,
+        INITCAP(NULLIF(BTRIM(transmission), ''))                                    AS transmission,
+        INITCAP(NULLIF(BTRIM(location), ''))                                        AS location,
+        -- origin_country is intentionally NOT projected here: hatla2ee used-car
+        -- listings don't carry it. We derive origin from brand in marts.dim_brand
+        -- via a hardcoded mapping instead.
+        INITCAP(NULLIF(BTRIM(assembly_country), ''))                                AS assembly_country,
+        scraped_at,
+        updated_at
+    FROM raw.cars
+    WHERE updated_at >= '{{ start_timestamp }}'
+      AND updated_at <  '{{ end_timestamp }}'
+)
 SELECT
     link,
-    NULLIF(BTRIM(external_id), '')                                              AS external_id,
-    -- price: strip everything that isn't a digit, then cast; NULL if nothing left.
-    NULLIF(REGEXP_REPLACE(COALESCE(price, ''), '[^0-9]', '', 'g'), '')::BIGINT AS price_egp,
-    -- km: same idea.
-    NULLIF(REGEXP_REPLACE(COALESCE(km, ''), '[^0-9]', '', 'g'), '')::INTEGER    AS km,
-    -- cc: same idea.
-    NULLIF(REGEXP_REPLACE(COALESCE(cc, ''), '[^0-9]', '', 'g'), '')::INTEGER    AS cc,
-    -- model_year: pull the first 4-digit run out of release_year.
-    NULLIF(SUBSTRING(COALESCE(release_year, '') FROM '\d{4}'), '')::INTEGER     AS model_year,
-    INITCAP(NULLIF(BTRIM(brand), ''))                                           AS brand,
-    INITCAP(NULLIF(BTRIM(model), ''))                                           AS model,
-    INITCAP(NULLIF(BTRIM(condition), ''))                                       AS condition,
-    INITCAP(NULLIF(BTRIM(color), ''))                                           AS color,
-    INITCAP(NULLIF(BTRIM(fuel), ''))                                            AS fuel,
-    INITCAP(NULLIF(BTRIM(transmission), ''))                                    AS transmission,
-    INITCAP(NULLIF(BTRIM(location), ''))                                        AS location,
-    -- origin_country is intentionally NOT projected here: hatla2ee used-car
-    -- listings don't carry it. We derive origin from brand in marts.dim_brand
-    -- via a hardcoded mapping instead.
-    INITCAP(NULLIF(BTRIM(assembly_country), ''))                                AS assembly_country,
+    external_id,
+    price_egp,
+    km,
+    cc,
+    model_year,
+    brand,
+    -- Per-brand model rollup. Most brands keep model_raw as-is. Brands
+    -- with high model-variant noise (e.g. Mercedes -- 100+ rows for
+    -- ~25 actual model families) get collapsed to family names so
+    -- dim_model and downstream charts aren't dominated by trim levels.
+    --
+    -- ADDING A NEW BRAND ROLLUP:
+    --   1. Add a WHEN block below for the brand.
+    --   2. Decide overrides (special-case strings) and a fallback rule
+    --      (the prefix-before-first-digit-or-space heuristic works for
+    --      most letter-and-number naming conventions).
+    --
+    -- Mercedes rollup: ~106 distinct model strings -> ~25 families.
+    -- Pattern: take the leading non-digit, non-space prefix as the
+    -- family identifier ("C 200" -> "C", "Cla 45 Amg" -> "Cla", "G63"
+    -- -> "G"), then map known prefixes to human-friendly names. Pure
+    -- numeric models ("180", "500") -> "Classic". A small override
+    -- table handles the strings the heuristic mishandles.
+    CASE
+        WHEN brand <> 'Mercedes' THEN model_raw
+
+        -- Mercedes overrides (heuristic-doesn't-fit cases)
+        WHEN model_raw = 'Sel'                            THEN 'S-Class'
+        WHEN model_raw IN ('Amg Gt', 'Gt 43')             THEN 'AMG GT'
+        WHEN model_raw IN ('Maybach', 'Maybach Gls')      THEN 'Maybach'
+        WHEN model_raw IN ('Viano', 'Vito')               THEN 'V-Class / Vans'
+        WHEN model_raw = 'Other'                          THEN 'Other'
+
+        -- Mercedes heuristic: prefix-to-family lookup
+        ELSE COALESCE(
+            CASE BTRIM(SUBSTRING(model_raw FROM '^[^0-9 ]+'))
+                WHEN 'A'   THEN 'A-Class'
+                WHEN 'B'   THEN 'B-Class'
+                WHEN 'C'   THEN 'C-Class'
+                WHEN 'E'   THEN 'E-Class'
+                WHEN 'S'   THEN 'S-Class'
+                WHEN 'V'   THEN 'V-Class / Vans'
+                WHEN 'G'   THEN 'G-Class'
+                WHEN 'Gl'  THEN 'GL-Class'
+                WHEN 'Gla' THEN 'GLA'
+                WHEN 'Glb' THEN 'GLB'
+                WHEN 'Glc' THEN 'GLC'
+                WHEN 'Gle' THEN 'GLE'
+                WHEN 'Glk' THEN 'GLK'
+                WHEN 'Gls' THEN 'GLS'
+                WHEN 'Cla' THEN 'CLA'
+                WHEN 'Cle' THEN 'CLE'
+                WHEN 'Cls' THEN 'CLS'
+                WHEN 'Sl'  THEN 'SL'
+                WHEN 'Slc' THEN 'SLC'
+                WHEN 'Slk' THEN 'SLK'
+                WHEN 'Eqa' THEN 'EQA'
+                WHEN 'Eqb' THEN 'EQB'
+                WHEN 'Eqe' THEN 'EQE'
+                WHEN 'Eqs' THEN 'EQS'
+                WHEN 'Eqv' THEN 'EQV'
+                ELSE NULL  -- unmapped prefix; fall through to fallback
+            END,
+            -- pure-numeric / blank model -> "Classic" (W123/W124-era
+            -- names like "180", "200", "500")
+            CASE WHEN BTRIM(SUBSTRING(model_raw FROM '^[^0-9 ]+')) IS NULL
+                 THEN 'Classic'
+            END,
+            -- Final fallback: keep the prefix verbatim. Should be rare
+            -- in practice; means a Mercedes string we haven't seen
+            -- before. Surfacing it here makes it easy to spot in the
+            -- dashboard and add to the table above.
+            BTRIM(SUBSTRING(model_raw FROM '^[^0-9 ]+'))
+        )
+    END                                                   AS model,
+    condition,
+    color,
+    fuel,
+    transmission,
+    location,
+    assembly_country,
     scraped_at,
     updated_at
-FROM raw.cars
-WHERE updated_at >= '{{ start_timestamp }}'
-  AND updated_at <  '{{ end_timestamp }}'
+FROM cleaned
