@@ -34,12 +34,15 @@ WITH distinct_vals AS (
     WHERE transmission IS NOT NULL
       AND transmission <> '(Unknown)'
 ),
-ranked AS (
+hashed AS (
+    -- See dim_brand for the rationale: 60-bit md5 hash gives stable,
+    -- deterministic ids that survive `make full-refresh` and never
+    -- shift when staging.cars membership changes.
     SELECT
-        DENSE_RANK() OVER (ORDER BY transmission)::BIGINT AS transmission_id,
+        ('x' || SUBSTR(MD5(transmission), 1, 15))::BIT(60)::BIGINT AS transmission_id,
         transmission
     FROM distinct_vals
 )
 SELECT 0::BIGINT AS transmission_id, '(Unknown)' AS transmission
 UNION ALL
-SELECT transmission_id, transmission FROM ranked
+SELECT transmission_id, transmission FROM hashed

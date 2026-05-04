@@ -35,12 +35,15 @@ WITH distinct_vals AS (
     WHERE location IS NOT NULL
       AND location <> '(Unknown)'
 ),
-ranked AS (
+hashed AS (
+    -- See dim_brand for the rationale: 60-bit md5 hash gives stable,
+    -- deterministic ids that survive `make full-refresh` and never
+    -- shift when staging.cars membership changes.
     SELECT
-        DENSE_RANK() OVER (ORDER BY location)::BIGINT AS location_id,
+        ('x' || SUBSTR(MD5(location), 1, 15))::BIT(60)::BIGINT AS location_id,
         location
     FROM distinct_vals
 )
 SELECT 0::BIGINT AS location_id, '(Unknown)' AS location
 UNION ALL
-SELECT location_id, location FROM ranked
+SELECT location_id, location FROM hashed

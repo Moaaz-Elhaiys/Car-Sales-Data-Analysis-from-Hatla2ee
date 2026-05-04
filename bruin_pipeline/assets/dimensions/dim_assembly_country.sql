@@ -35,12 +35,15 @@ WITH distinct_vals AS (
     WHERE assembly_country IS NOT NULL
       AND assembly_country <> '(Unknown)'
 ),
-ranked AS (
+hashed AS (
+    -- See dim_brand for the rationale: 60-bit md5 hash gives stable,
+    -- deterministic ids that survive `make full-refresh` and never
+    -- shift when staging.cars membership changes.
     SELECT
-        DENSE_RANK() OVER (ORDER BY assembly_country)::BIGINT AS assembly_country_id,
+        ('x' || SUBSTR(MD5(assembly_country), 1, 15))::BIT(60)::BIGINT AS assembly_country_id,
         assembly_country
     FROM distinct_vals
 )
 SELECT 0::BIGINT AS assembly_country_id, '(Unknown)' AS assembly_country
 UNION ALL
-SELECT assembly_country_id, assembly_country FROM ranked
+SELECT assembly_country_id, assembly_country FROM hashed
