@@ -107,7 +107,7 @@ On first connect in pgAdmin, register a new server with:
 │       ├── staging/staging.cars.sql
 │       ├── dimensions/dim_*.sql
 │       └── facts/fact_car_listings.sql
-└── Cars dashboard.pdf          # Power BI dashboard export
+└── Egypt_Cars_Market_Analysis.pdf          # Power BI dashboard export
 ```
 
 ## Ingestion
@@ -188,4 +188,4 @@ row count actually grows.
 - [x] Bruin assets: `staging.cars` + dimension tables + `fact_car_listings`
 - [x] Data-quality checks on every layer
 - [x] Incremental loads on `staging.cars` (`merge` strategy + `updated_at` watermark)
-- [ ] Refresh the Power BI dashboard against the star schema
+- [x] Refresh the Power BI dashboard against the star schema
