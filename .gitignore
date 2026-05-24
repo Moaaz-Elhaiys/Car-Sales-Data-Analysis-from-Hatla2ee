@@ -14,7 +14,9 @@ venv/
 
 # Scrapy
 .scrapy/
-*.log
+
+# Bruin
+.bruin.yml
 
 # OS
 .DS_Store
@@ -24,10 +26,12 @@ Thumbs.db
 .vscode/
 .idea/
 
-# Data (do not commit scraped output going forward)
+# Docker Volumes (Uncomment/edit if your docker-compose maps Postgres data locally)
+# pgdata/
+
+# Data & Logs (Do not commit scraped output or logs)
 data/
 *.jsonl
 *.csv
-logs/runs
-logs/*.log
-.bruin.yml
+logs/
+*.log
