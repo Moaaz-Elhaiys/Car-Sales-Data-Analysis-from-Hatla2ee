@@ -34,12 +34,15 @@ WITH distinct_vals AS (
     WHERE color IS NOT NULL
       AND color <> '(Unknown)'
 ),
-ranked AS (
+hashed AS (
+    -- See dim_brand for the rationale: 60-bit md5 hash gives stable,
+    -- deterministic ids that survive `make full-refresh` and never
+    -- shift when staging.cars membership changes.
     SELECT
-        DENSE_RANK() OVER (ORDER BY color)::BIGINT AS color_id,
+        ('x' || SUBSTR(MD5(color), 1, 15))::BIT(60)::BIGINT AS color_id,
         color
     FROM distinct_vals
 )
 SELECT 0::BIGINT AS color_id, '(Unknown)' AS color
 UNION ALL
-SELECT color_id, color FROM ranked
+SELECT color_id, color FROM hashed

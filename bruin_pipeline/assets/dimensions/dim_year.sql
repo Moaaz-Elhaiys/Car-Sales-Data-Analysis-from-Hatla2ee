@@ -32,13 +32,16 @@ WITH distinct_years AS (
     FROM staging.cars
     WHERE model_year IS NOT NULL
 ),
-ranked AS (
+hashed AS (
+    -- See dim_brand for the rationale: 60-bit md5 hash gives stable,
+    -- deterministic ids that survive `make full-refresh` and never
+    -- shift when staging.cars membership changes.
     SELECT
-        DENSE_RANK() OVER (ORDER BY model_year)::BIGINT AS year_id,
+        ('x' || SUBSTR(MD5(model_year::TEXT), 1, 15))::BIT(60)::BIGINT AS year_id,
         model_year,
         (model_year / 10) * 10 AS decade
     FROM distinct_years
 )
 SELECT 0::BIGINT AS year_id, NULL::INTEGER AS model_year, NULL::INTEGER AS decade
 UNION ALL
-SELECT year_id, model_year, decade FROM ranked
+SELECT year_id, model_year, decade FROM hashed

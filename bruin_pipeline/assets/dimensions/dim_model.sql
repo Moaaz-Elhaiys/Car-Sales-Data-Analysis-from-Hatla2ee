@@ -45,13 +45,19 @@ WITH distinct_models AS (
     WHERE s.model IS NOT NULL
       AND s.model <> '(Unknown)'  -- defensive: never duplicate the sentinel
 ),
-ranked AS (
+hashed AS (
+    -- 60-bit md5 hash of the (brand_id, model) natural key. Deterministic:
+    -- the same (brand, model) pair always produces the same model_id,
+    -- independent of what other rows exist or the order they're processed.
+    -- This is the key property that prevents FK rot in fact_car_listings
+    -- when staging.cars membership changes (e.g. a new model appears, or a
+    -- model rollup like Mercedes/BMW/Hyundai/VW changes the DISTINCT set).
     SELECT
-        DENSE_RANK() OVER (ORDER BY model, brand_id)::BIGINT AS model_id,
+        ('x' || SUBSTR(MD5(brand_id::TEXT || '|' || model), 1, 15))::BIT(60)::BIGINT AS model_id,
         model,
         brand_id
     FROM distinct_models
 )
 SELECT 0::BIGINT AS model_id, '(Unknown)' AS model, 0::BIGINT AS brand_id
 UNION ALL
-SELECT model_id, model, brand_id FROM ranked
+SELECT model_id, model, brand_id FROM hashed

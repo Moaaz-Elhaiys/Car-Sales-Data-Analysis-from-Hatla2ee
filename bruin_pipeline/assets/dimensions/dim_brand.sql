@@ -52,16 +52,22 @@ WITH distinct_brands AS (
     WHERE brand IS NOT NULL
       AND brand <> '(Unknown)'  -- defensive: never duplicate the sentinel
 ),
-ranked AS (
+hashed AS (
+    -- 60-bit md5 hash of the brand name. Deterministic: same brand text
+    -- always produces the same brand_id, independent of other rows or
+    -- ordering. Stable across `make full-refresh`, prevents FK rot in
+    -- downstream fact rows when staging.cars membership changes. The
+    -- 60-bit cast keeps the value in the non-negative bigint range
+    -- (0, 2^60) -- ~1.15e18 unique values, far more than the brand space.
     SELECT
-        DENSE_RANK() OVER (ORDER BY brand)::BIGINT AS brand_id,
+        ('x' || SUBSTR(MD5(brand), 1, 15))::BIT(60)::BIGINT AS brand_id,
         brand
     FROM distinct_brands
 ),
 all_rows AS (
     SELECT 0::BIGINT AS brand_id, '(Unknown)'::TEXT AS brand
     UNION ALL
-    SELECT brand_id, brand FROM ranked
+    SELECT brand_id, brand FROM hashed
 )
 SELECT
     brand_id,

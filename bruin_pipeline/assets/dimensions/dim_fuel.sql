@@ -34,12 +34,15 @@ WITH distinct_fuels AS (
     WHERE fuel IS NOT NULL
       AND fuel <> '(Unknown)'
 ),
-ranked AS (
+hashed AS (
+    -- See dim_brand for the rationale: 60-bit md5 hash gives stable,
+    -- deterministic ids that survive `make full-refresh` and never
+    -- shift when staging.cars membership changes.
     SELECT
-        DENSE_RANK() OVER (ORDER BY fuel)::BIGINT AS fuel_id,
+        ('x' || SUBSTR(MD5(fuel), 1, 15))::BIT(60)::BIGINT AS fuel_id,
         fuel
     FROM distinct_fuels
 )
 SELECT 0::BIGINT AS fuel_id, '(Unknown)' AS fuel
 UNION ALL
-SELECT fuel_id, fuel FROM ranked
+SELECT fuel_id, fuel FROM hashed
